@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .journal_base import JournalBase
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS transitions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +36,7 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class Journal:
+class Journal(JournalBase):
     """SQLite-backed event log. All sqlite3 calls run on a thread via
     asyncio.to_thread so the event loop is never blocked by disk I/O."""
 

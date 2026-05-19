@@ -26,10 +26,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .ai_commander import AICommander, AICommanderError, PlanStep
-from .auth import auth_enabled, require_token, require_token_ws
+from .auth import (
+    Role,
+    auth_enabled,
+    require_admin,
+    require_operator,
+    require_token_ws,
+    require_viewer,
+)
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .journal import Journal
+from .journal_base import JournalBase
 from .logging_setup import configure as configure_logging
 from .middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from .models import (
@@ -43,7 +51,9 @@ from .models import (
 )
 from .plan_validator import validate_plan
 from .rate_limit import TokenBucket
+from .secrets import env_or_file
 from .state_machine import InvalidTransitionError, StateMachine
+from .tracing import configure as configure_tracing
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -51,10 +61,12 @@ configure_logging()
 logger = logging.getLogger("steelmind")
 
 SENSOR_HZ = float(os.getenv("SENSOR_HZ", "20"))
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = env_or_file("ANTHROPIC_API_KEY")
 AI_RATE_PER_SEC = float(os.getenv("AI_RATE_PER_SEC", "0.5"))  # 1 call / 2s sustained
 AI_RATE_BURST = float(os.getenv("AI_RATE_BURST", "3"))
+JOURNAL_BACKEND = os.getenv("JOURNAL_BACKEND", "sqlite").lower()
 JOURNAL_DB = os.getenv("JOURNAL_DB", "steelmind.db")
+JOURNAL_DSN = env_or_file("JOURNAL_DSN")  # postgres-only
 JOURNAL_KEEP_TRANSITIONS = int(os.getenv("JOURNAL_KEEP_TRANSITIONS", "5000"))
 JOURNAL_KEEP_AI = int(os.getenv("JOURNAL_KEEP_AI", "1000"))
 JOURNAL_PRUNE_INTERVAL_SEC = float(os.getenv("JOURNAL_PRUNE_INTERVAL_SEC", "60"))
@@ -264,6 +276,26 @@ class Metrics:
         return "\n".join(lines)
 
 
+def _build_journal() -> JournalBase:
+    """Resolve which journal backend to use based on JOURNAL_BACKEND env.
+
+    Default is SQLite for zero-config demos. Set JOURNAL_BACKEND=postgres
+    and JOURNAL_DSN=postgresql://... in any multi-replica deployment so
+    every replica shares the same event history."""
+    if JOURNAL_BACKEND == "postgres":
+        if not JOURNAL_DSN:
+            raise RuntimeError(
+                "JOURNAL_BACKEND=postgres requires JOURNAL_DSN (or JOURNAL_DSN_FILE)"
+            )
+        # Late import keeps asyncpg optional for the SQLite default.
+        from .journal_postgres import PostgresJournal
+
+        return PostgresJournal(JOURNAL_DSN)
+    if JOURNAL_BACKEND not in ("sqlite", ""):
+        raise RuntimeError(f"unknown JOURNAL_BACKEND: {JOURNAL_BACKEND!r}")
+    return Journal(JOURNAL_DB)
+
+
 class AppContext:
     def __init__(self) -> None:
         self.state_machine = StateMachine()
@@ -276,7 +308,10 @@ class AppContext:
         # Per-client last-pong timestamps for the heartbeat sweeper.
         self.ws_last_seen: dict[WebSocket, float] = {}
         self.ai_rate = TokenBucket(rate_per_sec=AI_RATE_PER_SEC, burst=AI_RATE_BURST)
-        self.journal = Journal(JOURNAL_DB)
+        # Journal construction is deferred to start() so a misconfigured
+        # JOURNAL_BACKEND doesn't break module import — error surfaces at
+        # lifespan startup where it can be logged and reported via /readyz.
+        self.journal: JournalBase | None = None
         self.metrics = Metrics()
         self.background_tasks: set[asyncio.Task[None]] = set()
         self.current_tree: BehaviorTree | None = None
@@ -287,6 +322,7 @@ class AppContext:
         self._heartbeat_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        self.journal = _build_journal()
         await self.journal.init()
         self._sensor_task = asyncio.create_task(self._sensor_loop())
         self._transition_task = asyncio.create_task(self._transition_loop())
@@ -413,6 +449,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="steelmind backend", lifespan=lifespan)
 
+# OpenTelemetry: wired before the middleware stack so spans cover everything.
+# No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+configure_tracing(app)
+
 # Order matters: outermost runs first per request.
 # 1) RequestIdMiddleware tags every request and logs it (so the size-limit
 #    rejection below still appears in the access log under a tagged id).
@@ -476,7 +516,7 @@ async def readyz() -> Response:
     return Response(content="ready", media_type="text/plain")
 
 
-@app.post("/ai-reset", dependencies=[Depends(require_token)])
+@app.post("/ai-reset", dependencies=[Depends(require_admin)])
 async def ai_reset(request: Request) -> dict:
     sid = request.headers.get("x-session-id")
     ctx.ai.reset_history(sid[:64] if sid else None)
@@ -496,12 +536,12 @@ async def metrics() -> Response:
 # Journal endpoints carry user-supplied text (AI prompts) and full transition
 # history. /counts is just integers so it's safe to leave open for monitoring;
 # the row-level endpoints require auth when API_TOKEN is set.
-@app.get("/journal/transitions", dependencies=[Depends(require_token)])
+@app.get("/journal/transitions", dependencies=[Depends(require_viewer)])
 async def journal_transitions(limit: int = 100) -> dict:
     return {"transitions": await ctx.journal.list_transitions(limit=min(limit, 1000))}
 
 
-@app.get("/journal/ai-commands", dependencies=[Depends(require_token)])
+@app.get("/journal/ai-commands", dependencies=[Depends(require_viewer)])
 async def journal_ai_commands(limit: int = 100) -> dict:
     return {"ai_commands": await ctx.journal.list_ai_commands(limit=min(limit, 1000))}
 
@@ -544,7 +584,7 @@ async def _dispatch_command(req: CommandRequest) -> CommandResponse:
     return CommandResponse(ok=True, message=f"{cmd} accepted", status=ctx.state_machine.status)
 
 
-@app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_token)])
+@app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_operator)])
 async def command(req: CommandRequest) -> CommandResponse:
     return await _dispatch_command(req)
 
@@ -610,7 +650,7 @@ class AICommandResponse(BaseModel):
 @app.post(
     "/ai-command",
     response_model=AICommandResponse,
-    dependencies=[Depends(require_token)],
+    dependencies=[Depends(require_operator)],
 )
 async def ai_command(req: AICommandRequest, request: Request) -> AICommandResponse:
     text_preview = (req.text or "").strip()
@@ -728,7 +768,8 @@ async def _execute_plan(steps: list[PlanStep]) -> None:
 async def websocket_endpoint(ws: WebSocket) -> None:
     # Accept the upgrade first so we can send a structured close on auth fail.
     await ws.accept()
-    if not await require_token_ws(ws):
+    role = await require_token_ws(ws, min_role=Role.OPERATOR)
+    if role is None:
         return
     # require_token_ws didn't close → connection is authorized. Register
     # without re-accepting.

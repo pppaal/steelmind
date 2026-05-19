@@ -121,8 +121,55 @@ cd frontend && npm run typecheck && npm run build
 
 ## Environment variables
 
-| Variable               | Where      | Default                    | Notes                              |
-|------------------------|------------|----------------------------|------------------------------------|
-| `ANTHROPIC_API_KEY`    | backend    | unset                      | required for `/ai-command`         |
-| `SENSOR_HZ`            | backend    | `20`                       | sensor broadcast rate              |
-| `NEXT_PUBLIC_WS_URL`   | frontend   | `ws://localhost:8000/ws`   | also used to derive HTTP base      |
+Most secrets accept an `*_FILE` variant pointing at a file path (Docker /
+k8s secret convention). The file's contents are read with trailing
+whitespace stripped.
+
+| Variable                       | Where    | Default                    | Notes                                          |
+|--------------------------------|----------|----------------------------|------------------------------------------------|
+| `ANTHROPIC_API_KEY`            | backend  | unset                      | required for `/ai-command`                     |
+| `API_TOKEN`                    | backend  | unset                      | legacy single-token mode → operator role       |
+| `API_TOKEN_VIEWER`             | backend  | unset                      | comma-sep; can read `/journal/*`               |
+| `API_TOKEN_OPERATOR`           | backend  | unset                      | comma-sep; can issue commands, run AI          |
+| `API_TOKEN_ADMIN`              | backend  | unset                      | comma-sep; everything incl. `/ai-reset`        |
+| `SENSOR_HZ`                    | backend  | `20`                       | sensor broadcast rate                          |
+| `AI_TIMEOUT_SEC`               | backend  | `20`                       | per-request anthropic timeout                  |
+| `AI_RATE_PER_SEC`              | backend  | `0.5`                      | sustained req/s through `/ai-command`          |
+| `AI_RATE_BURST`                | backend  | `3`                        | token bucket burst                             |
+| `MAX_REQUEST_BYTES`            | backend  | `65536`                    | HTTP body cap → 413                            |
+| `WS_HEARTBEAT_SEC`             | backend  | `20`                       | server-side ping cadence                       |
+| `WS_HEARTBEAT_TIMEOUT_SEC`     | backend  | `60`                       | idle ws eviction threshold                     |
+| `JOURNAL_BACKEND`              | backend  | `sqlite`                   | `sqlite` or `postgres`                         |
+| `JOURNAL_DB`                   | backend  | `steelmind.db`             | sqlite file path                               |
+| `JOURNAL_DSN`                  | backend  | unset                      | postgres URL when backend=postgres             |
+| `JOURNAL_KEEP_TRANSITIONS`     | backend  | `5000`                     | retention cap                                  |
+| `JOURNAL_KEEP_AI`              | backend  | `1000`                     | retention cap                                  |
+| `JOURNAL_PRUNE_INTERVAL_SEC`   | backend  | `60`                       | background prune cycle                         |
+| `CORS_ORIGINS`                 | backend  | `*`                        | comma-sep; wildcard disables credentials       |
+| `LOG_FORMAT`                   | backend  | tty → text, else json      | force with `json` or `text`                    |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`  | backend  | unset                      | enables tracing; needs `requirements-otel.txt` |
+| `OTEL_SERVICE_NAME`            | backend  | `steelmind`                | OTel service.name resource attr                |
+| `NEXT_PUBLIC_WS_URL`           | frontend | `ws://localhost:8000/ws`   | HTTP base is auto-derived                      |
+
+## Auth roles
+
+| Role     | Endpoints                                                    |
+|----------|--------------------------------------------------------------|
+| viewer   | `/journal/transitions`, `/journal/ai-commands`               |
+| operator | viewer + `/command`, `/ai-command`, `/ws` (with `?token=`)   |
+| admin    | operator + `/ai-reset`                                       |
+
+When no `API_TOKEN*` is set, auth is bypassed (single-user dev/demo). With
+`API_TOKEN` alone, that token grants the operator role — same behavior as
+before role-based auth landed.
+
+## Optional integrations
+
+* **Postgres journal**: `pip install -r requirements-postgres.txt`,
+  set `JOURNAL_BACKEND=postgres` and `JOURNAL_DSN=postgresql://...`.
+* **OpenTelemetry**: `pip install -r requirements-otel.txt`, set
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318` and traces flow
+  for every HTTP request (and the Anthropic httpx calls inside them).
+* **Load testing**: `k6 run loadtest/k6.js` (with `BASE_URL`, `WS_URL`,
+  `API_TOKEN` env). Runs probe storm, command burst, ws subscriber
+  scenarios with throughput + latency thresholds.

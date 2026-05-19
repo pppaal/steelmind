@@ -1,0 +1,3 @@
+# Install when JOURNAL_BACKEND=postgres:
+#   pip install -r requirements-postgres.txt
+asyncpg>=0.29.0,<1.0
