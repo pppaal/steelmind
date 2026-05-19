@@ -40,6 +40,27 @@ function buildRig(): Rig {
   parts.push(head);
   group.add(head);
 
+  // Face: visor strip + two eyes — sit slightly proud of the front (+Z) face.
+  const visor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.08, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x0a0f1c, roughness: 0.2, metalness: 0.6, emissive: 0x111827 }),
+  );
+  visor.position.set(0, 0.04, 0.21);
+  head.add(visor);
+
+  const eyeMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0x60a5fa,
+    emissiveIntensity: 0.9,
+    roughness: 0.4,
+  });
+  const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.02), eyeMat);
+  eyeL.position.set(-0.08, 0.04, 0.215);
+  const eyeR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.02), eyeMat);
+  eyeR.position.set(0.08, 0.04, 0.215);
+  head.add(eyeL);
+  head.add(eyeR);
+
   const makeLimbSegment = (
     parent: THREE.Object3D,
     pivot: THREE.Vector3,
@@ -158,6 +179,17 @@ export default function RobotScene({ state, sensor }: Props) {
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.6;
     scene.add(grid);
+
+    // Facing indicator: small arrow on the ground pointing along the robot's +Z.
+    const arrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0.02, 0),
+      0.9,
+      0x38bdf8,
+      0.25,
+      0.15,
+    );
+    scene.add(arrow);
 
     const rig = buildRig();
     rig.group.traverse((o) => {

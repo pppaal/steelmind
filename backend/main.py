@@ -255,6 +255,13 @@ async def command(req: CommandRequest) -> CommandResponse:
 async def _run_behavior(name: str) -> None:
     if ctx.current_tree and ctx.current_tree.is_running:
         await ctx.current_tree.stop()
+        # Cancelled BT may have set behavior name but skipped the exit action.
+        if ctx.state_machine.status.current_behavior is not None:
+            ctx.state_machine.set_behavior(None)
+        if ctx.state_machine.state == RobotState.EXECUTING:
+            await ctx.state_machine.transition(
+                RobotState.STANDING, reason="behavior:cancelled", force=True
+            )
     tree = BEHAVIORS[name](ctx.state_machine)
     ctx.current_tree = tree
     tree.start()
@@ -274,12 +281,17 @@ class AICommandRequest(BaseModel):
     text: str
 
 
-class AICommandResponse(BaseModel):
+class AIPlanStepResult(BaseModel):
     command: str
     params: dict = {}
-    explanation: str
     executed: bool
     detail: str | None = None
+
+
+class AICommandResponse(BaseModel):
+    explanation: str
+    steps: list[AIPlanStepResult]
+    fully_executed: bool
 
 
 @app.post("/ai-command", response_model=AICommandResponse)
@@ -292,7 +304,7 @@ async def ai_command(req: AICommandRequest) -> AICommandResponse:
         raise HTTPException(status_code=400, detail="text is required")
 
     try:
-        result = await ctx.ai.translate(text, ctx.state_machine.status)
+        plan = await ctx.ai.translate(text, ctx.state_machine.status)
     except AICommanderError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -300,27 +312,46 @@ async def ai_command(req: AICommandRequest) -> AICommandResponse:
         {
             "type": "ai_command",
             "input": text,
-            "command": result.command,
-            "params": result.params,
-            "explanation": result.explanation,
+            "command": plan.first.command,
+            "params": plan.first.params,
+            "explanation": plan.explanation,
+            "step_count": len(plan.steps),
         }
     )
 
-    try:
-        await command(CommandRequest(command=result.command, params=result.params))
-        executed = True
-        detail = None
-    except HTTPException as e:
-        executed = False
-        detail = str(e.detail)
+    # Schedule the plan to run in the background so the HTTP call returns
+    # immediately. Each step waits for behavior completion (when applicable)
+    # before the next is dispatched.
+    asyncio.create_task(_execute_plan(plan.steps))
 
+    # Optimistically return the plan; clients track real execution via /ws.
     return AICommandResponse(
-        command=result.command,
-        params=result.params,
-        explanation=result.explanation,
-        executed=executed,
-        detail=detail,
+        explanation=plan.explanation,
+        steps=[
+            AIPlanStepResult(command=s.command, params=s.params, executed=False, detail=None)
+            for s in plan.steps
+        ],
+        fully_executed=False,
     )
+
+
+async def _execute_plan(steps: list) -> None:
+    for step in steps:
+        try:
+            await command(CommandRequest(command=step.command, params=step.params))
+        except HTTPException as e:
+            await ctx.manager.broadcast(
+                {"type": "plan_step_failed", "command": step.command, "detail": str(e.detail)}
+            )
+            return
+        # If we just kicked off a behavior, wait until it finishes before
+        # advancing to the next step. The behavior tree itself transitions
+        # the state machine back to STANDING when done.
+        if step.command == "execute" and ctx.current_tree is not None:
+            await ctx.current_tree.wait()
+        else:
+            await asyncio.sleep(0.4)
+    await ctx.manager.broadcast({"type": "plan_completed", "step_count": len(steps)})
 
 
 @app.websocket("/ws")

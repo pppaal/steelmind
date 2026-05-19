@@ -57,6 +57,16 @@ async def test_self_transition_is_noop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_walking_to_idle_direct() -> None:
+    # WALKING cannot transition directly to IDLE (must go via STANDING).
+    sm = StateMachine()
+    await sm.transition(RobotState.STANDING)
+    await sm.transition(RobotState.WALKING)
+    with pytest.raises(InvalidTransitionError):
+        await sm.transition(RobotState.IDLE)
+
+
+@pytest.mark.asyncio
 async def test_set_behavior_and_error() -> None:
     sm = StateMachine()
     sm.set_behavior("wave")

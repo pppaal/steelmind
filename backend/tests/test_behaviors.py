@@ -26,3 +26,13 @@ async def test_demo_runs_and_ends_in_standing() -> None:
     await task
     assert sm.state == RobotState.STANDING
     assert sm.status.current_behavior is None
+
+
+@pytest.mark.asyncio
+async def test_behavior_tree_wait_returns_last_status() -> None:
+    sm = StateMachine()
+    tree = BEHAVIORS["demo"](sm)
+    tree.start()
+    status = await tree.wait()
+    assert status is not None
+    assert not tree.is_running

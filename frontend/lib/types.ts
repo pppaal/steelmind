@@ -56,6 +56,18 @@ export interface AICommandEvent {
   command: string;
   params: Record<string, unknown>;
   explanation: string;
+  step_count?: number;
+}
+
+export interface PlanCompletedEvent {
+  type: "plan_completed";
+  step_count: number;
+}
+
+export interface PlanStepFailedEvent {
+  type: "plan_step_failed";
+  command: string;
+  detail: string;
 }
 
 export type ServerEvent =
@@ -64,16 +76,23 @@ export type ServerEvent =
   | StatusEvent
   | BehaviorEvent
   | AICommandEvent
+  | PlanCompletedEvent
+  | PlanStepFailedEvent
   | { type: "pong" }
   | { type: "error"; detail: string }
   | { ok: boolean; message?: string; status: RobotStatus };
 
-export interface AICommandResponse {
+export interface AIPlanStep {
   command: string;
   params: Record<string, unknown>;
-  explanation: string;
   executed: boolean;
   detail: string | null;
+}
+
+export interface AICommandResponse {
+  explanation: string;
+  steps: AIPlanStep[];
+  fully_executed: boolean;
 }
 
 export const STATE_COLORS: Record<RobotState, string> = {

@@ -7,9 +7,7 @@ import type { AICommandResponse } from "@/lib/types";
 interface Bubble {
   id: number;
   text: string;
-  command: string;
-  executed: boolean;
-  detail: string | null;
+  steps: { command: string; behavior?: string }[];
 }
 
 export default function AICommandInput() {
@@ -29,7 +27,8 @@ export default function AICommandInput() {
   const showBubble = (b: Bubble) => {
     setBubble(b);
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setBubble(null), 3000);
+    const ttl = Math.min(8000, 2500 + b.steps.length * 800);
+    timerRef.current = setTimeout(() => setBubble(null), ttl);
   };
 
   const submit = async () => {
@@ -51,9 +50,10 @@ export default function AICommandInput() {
       showBubble({
         id: Date.now(),
         text: data.explanation,
-        command: data.command,
-        executed: data.executed,
-        detail: data.detail,
+        steps: data.steps.map((s) => ({
+          command: s.command,
+          behavior: typeof s.params?.behavior === "string" ? (s.params.behavior as string) : undefined,
+        })),
       });
       setText("");
     } catch (e) {
@@ -82,31 +82,30 @@ export default function AICommandInput() {
             className={`relative mx-auto max-w-xl rounded-lg border px-4 py-2 text-sm shadow-lg ${
               error
                 ? "border-rose-500/60 bg-rose-950/90 text-rose-200"
-                : bubble?.executed
-                  ? "border-sky-500/60 bg-sky-950/90 text-sky-100"
-                  : "border-amber-500/60 bg-amber-950/90 text-amber-100"
+                : "border-sky-500/60 bg-sky-950/90 text-sky-100"
             }`}
           >
             {error ? (
               <span className="font-mono text-xs">{error}</span>
             ) : (
-              <>
-                <span className="mr-2 rounded bg-zinc-800/70 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider">
-                  {bubble?.command}
-                </span>
-                <span>{bubble?.text}</span>
-                {bubble && !bubble.executed && bubble.detail ? (
-                  <span className="ml-2 text-[10px] text-zinc-400">({bubble.detail})</span>
-                ) : null}
-              </>
+              <div className="space-y-1.5">
+                <div>{bubble?.text}</div>
+                <div className="flex flex-wrap items-center gap-1">
+                  {bubble?.steps.map((s, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-zinc-500">→</span>}
+                      <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider">
+                        {s.command}
+                        {s.behavior ? `:${s.behavior}` : ""}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
             <div
               className={`absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r ${
-                error
-                  ? "border-rose-500/60 bg-rose-950/90"
-                  : bubble?.executed
-                    ? "border-sky-500/60 bg-sky-950/90"
-                    : "border-amber-500/60 bg-amber-950/90"
+                error ? "border-rose-500/60 bg-rose-950/90" : "border-sky-500/60 bg-sky-950/90"
               }`}
             />
           </div>

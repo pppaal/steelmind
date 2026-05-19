@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import AICommandInput from "@/components/AICommandInput";
 import CommandBar from "@/components/CommandBar";
 import EventLog from "@/components/EventLog";
+import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import TelemetryPanel from "@/components/TelemetryPanel";
 import { deriveApiBase } from "@/lib/api";
 import { useRobotSocket } from "@/lib/useRobotSocket";
@@ -35,6 +36,7 @@ export default function Page() {
           <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-zinc-800 bg-zinc-950/80 px-3 py-2 font-mono text-[11px] text-zinc-400">
             drag · zoom · {connection}
           </div>
+          <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
           <EventLog entries={log} />
         </div>
         <TelemetryPanel

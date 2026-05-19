@@ -14,53 +14,72 @@ logger = logging.getLogger("steelmind.ai")
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 SYSTEM_PROMPT = """너는 휴머노이드 로봇 제어 AI다.
-자연어 입력을 받아 로봇이 실행할 단일 명령으로 변환한다.
+자연어 입력을 받아 로봇이 실행할 명령 시퀀스로 변환한다.
 
 사용 가능한 명령:
 - stand: 일어선다. IDLE / WALKING 에서 STANDING 으로 전환.
-- walk: 걷는다. STANDING 에서만 가능. IDLE 이면 먼저 stand 가 필요하니 stand 를 선택한다.
+- walk: 걷는다. STANDING 에서만 가능. IDLE 이면 먼저 stand 가 필요하다.
 - idle: 휴식/앉기 자세. STANDING / WALKING / EXECUTING 에서 IDLE 로 전환.
-- execute: 정의된 behavior 를 실행한다. params.behavior 에 이름을 넣는다 (없으면 "demo").
+- execute: 정의된 behavior 를 실행한다. params.behavior 에 이름을 넣는다.
 
 사용 가능한 behavior:
 {behaviors}
 
 규칙:
-1. 입력이 모호하거나 여러 동작을 요구하면 "다음에 해야 할 한 단계"만 고른다.
-2. 현재 상태를 반드시 고려해 유효 전이만 선택한다.
-3. explanation 은 한국어 한 문장으로 간결하게.
-4. 출력은 도구 호출(tool_use)로만 한다."""
+1. 현재 상태에서 시작하는 유효한 명령 시퀀스를 만든다. 예) IDLE 에서 walk 를 요구하면 [stand, walk].
+2. 입력이 단일 동작이면 steps 에 한 개만 넣는다.
+3. 입력이 "일어서서 걸어서 손 흔들어" 같은 복합 동작이면 stand → walk → (멈춤 위해 stand) → execute(wave) 처럼 여러 단계로 풀어준다.
+4. walk 후 execute 를 하려면 먼저 stand 로 전이해야 한다.
+5. explanation 은 전체 계획을 한국어 한 문장으로 요약.
+6. 출력은 도구 호출(tool_use)로만 한다."""
 
 TOOL = {
-    "name": "execute_robot_command",
-    "description": "휴머노이드 로봇에 단일 명령을 내린다.",
+    "name": "execute_robot_plan",
+    "description": "휴머노이드 로봇에 단일 또는 다단계 명령 시퀀스를 내린다.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "command": {
-                "type": "string",
-                "enum": ["stand", "walk", "idle", "execute"],
-                "description": "실행할 명령.",
-            },
-            "params": {
-                "type": "object",
-                "description": "명령 파라미터. execute 의 경우 {\"behavior\": \"demo\"} 형태.",
-                "additionalProperties": True,
+            "steps": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "enum": ["stand", "walk", "idle", "execute"],
+                        },
+                        "params": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                    },
+                    "required": ["command"],
+                },
             },
             "explanation": {
                 "type": "string",
-                "description": "이 명령을 고른 이유를 한국어 한 문장으로.",
+                "description": "전체 계획의 의도를 한국어 한 문장으로.",
             },
         },
-        "required": ["command", "explanation"],
+        "required": ["steps", "explanation"],
     },
 }
 
 
-class AICommandResult(BaseModel):
+class PlanStep(BaseModel):
     command: str
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIPlanResult(BaseModel):
+    steps: list[PlanStep]
     explanation: str
+
+    @property
+    def first(self) -> PlanStep:
+        return self.steps[0]
 
 
 class AICommanderError(Exception):
@@ -81,7 +100,7 @@ class AICommander:
     def enabled(self) -> bool:
         return self._client is not None
 
-    async def translate(self, text: str, status: RobotStatus) -> AICommandResult:
+    async def translate(self, text: str, status: RobotStatus) -> AIPlanResult:
         if self._client is None:
             raise AICommanderError("ANTHROPIC_API_KEY is not configured")
 
@@ -115,7 +134,7 @@ class AICommander:
             if block.type == "tool_use" and block.name == TOOL["name"]:
                 data = block.input or {}
                 try:
-                    return AICommandResult(**data)
+                    return AIPlanResult(**data)
                 except Exception as e:
                     raise AICommanderError(f"invalid tool input: {data!r}") from e
 

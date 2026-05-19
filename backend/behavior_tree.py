@@ -122,3 +122,12 @@ class BehaviorTree:
     @property
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    async def wait(self) -> NodeStatus | None:
+        if self._task is None:
+            return self.last_status
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        return self.last_status
