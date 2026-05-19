@@ -61,14 +61,36 @@ export function useRobotSocket(): RobotSocket {
       } catch {
         return;
       }
+      // Server-driven heartbeat: echo any ping so the server's idle-eviction
+      // sweep sees us as live. The reducer ignores ping/pong frames.
+      if ("type" in parsed && parsed.type === "ping") {
+        try {
+          ws.send(JSON.stringify({ type: "pong" }));
+        } catch {
+          /* socket closing; ignore */
+        }
+        return;
+      }
       setState((s) => reduce(s, parsed));
     };
   }, []);
 
   useEffect(() => {
     connect();
+    // Reconnect when the API token changes in another tab (storage event
+    // only fires cross-tab) OR when this tab calls setApiToken (we dispatch
+    // a synthetic storage event there). Without this, a user who pastes a
+    // new token sees their existing socket keep using the old one until
+    // the next natural reconnect.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "steelmind_api_token") {
+        wsRef.current?.close();
+      }
+    };
+    window.addEventListener("storage", onStorage);
     return () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      window.removeEventListener("storage", onStorage);
       wsRef.current?.close();
     };
   }, [connect]);

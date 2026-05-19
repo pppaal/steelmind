@@ -14,8 +14,20 @@ export function getApiToken(): string | null {
 export function setApiToken(token: string | null): void {
   if (typeof window === "undefined") return;
   try {
+    const old = window.localStorage.getItem(TOKEN_KEY);
     if (token) window.localStorage.setItem(TOKEN_KEY, token);
     else window.localStorage.removeItem(TOKEN_KEY);
+    // Same-tab dispatch — the native `storage` event only fires for *other*
+    // tabs, so subscribers in this tab (e.g. useRobotSocket) won't see the
+    // change otherwise.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: TOKEN_KEY,
+        oldValue: old,
+        newValue: token,
+        storageArea: window.localStorage,
+      }),
+    );
   } catch {
     // ignore
   }

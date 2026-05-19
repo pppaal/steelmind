@@ -79,6 +79,7 @@ export type ServerEvent =
   | AICommandEvent
   | PlanCompletedEvent
   | PlanStepFailedEvent
+  | { type: "ping" }
   | { type: "pong" }
   | { type: "error"; detail: string }
   | { ok: boolean; message?: string; status: RobotStatus };

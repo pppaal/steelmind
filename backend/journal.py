@@ -57,6 +57,15 @@ class Journal:
         # check_same_thread=False because asyncio.to_thread may run subsequent
         # operations on different worker threads; we serialize via self._lock.
         conn = sqlite3.connect(self.path, check_same_thread=False)
+        # WAL lets readers (journal queries) run concurrently with writers
+        # (broadcaster + ai_command append) without blocking. busy_timeout
+        # makes any rare write contention wait briefly instead of erroring.
+        # NORMAL synchronous is the WAL-recommended balance: safe across
+        # process crashes, slightly relaxed vs FULL on power-loss durability.
+        if self.path != ":memory:":
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
         conn.commit()
         return conn

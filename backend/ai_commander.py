@@ -16,6 +16,7 @@ MAX_USER_INPUT_LEN = 500
 logger = logging.getLogger("steelmind.ai")
 
 DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_TIMEOUT_SEC = 20.0
 
 SYSTEM_PROMPT = """너는 휴머노이드 로봇 제어 AI다.
 자연어 입력을 받아 로봇이 실행할 명령 시퀀스로 변환한다.
@@ -100,11 +101,18 @@ class AICommanderError(Exception):
 
 
 class AICommander:
-    def __init__(self, api_key: str | None, model: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str = DEFAULT_MODEL,
+        timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+    ) -> None:
         if not api_key:
             self._client: AsyncAnthropic | None = None
         else:
-            self._client = AsyncAnthropic(api_key=api_key)
+            # Per-request timeout caps tail latency and prevents a hung
+            # upstream from holding background tasks open indefinitely.
+            self._client = AsyncAnthropic(api_key=api_key, timeout=timeout_sec)
         self.model = model
         behaviors_block = "\n".join(f"  - {n}: {d}" for n, d in BEHAVIOR_DESCRIPTIONS.items())
         self._system_prompt = SYSTEM_PROMPT.format(behaviors=behaviors_block)

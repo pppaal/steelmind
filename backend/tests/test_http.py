@@ -10,23 +10,27 @@ def client() -> TestClient:
         yield c
 
 
-VALID_STATES = {"IDLE", "STANDING", "WALKING", "EXECUTING"}
-
-
-def test_health(client: TestClient) -> None:
-    r = client.get("/health")
+def test_health(fresh_app: TestClient) -> None:
+    r = fresh_app.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
-    # Global ctx survives across tests; just verify the field shape, not a
-    # specific starting state.
-    assert body["state"] in VALID_STATES
+    assert body["state"] == "IDLE"  # fresh ctx -> always starts at IDLE
+    assert body["ready"] is True
 
 
-def test_status(client: TestClient) -> None:
-    r = client.get("/status")
+def test_status(fresh_app: TestClient) -> None:
+    r = fresh_app.get("/status")
     assert r.status_code == 200
-    assert r.json()["state"] in VALID_STATES
+    assert r.json()["state"] == "IDLE"
+
+
+def test_livez_always_ok(fresh_app: TestClient) -> None:
+    assert fresh_app.get("/livez").status_code == 200
+
+
+def test_readyz_reflects_ready_flag(fresh_app: TestClient) -> None:
+    assert fresh_app.get("/readyz").status_code == 200
 
 
 def test_behaviors_listed(client: TestClient) -> None:

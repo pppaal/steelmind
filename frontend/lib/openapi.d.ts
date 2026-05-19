@@ -11,7 +11,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Health */
+        /**
+         * Health
+         * @description Full-fat health/inventory endpoint. Used by /health-style consumers
+         *     (the frontend) that want the operational details in one call.
+         *     For k8s-style probes prefer /livez and /readyz.
+         */
         get: operations["health_health_get"];
         put?: never;
         post?: never;
@@ -201,11 +206,8 @@ export interface components {
         AIPlanStepResult: {
             /** Command */
             command: string;
-            /**
-             * Params
-             * @default {}
-             */
-            params: {
+            /** Params */
+            params?: {
                 [key: string]: unknown;
             };
             /** Executed */

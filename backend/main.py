@@ -31,6 +31,7 @@ from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .journal import Journal
 from .logging_setup import configure as configure_logging
+from .middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -60,6 +61,11 @@ JOURNAL_PRUNE_INTERVAL_SEC = float(os.getenv("JOURNAL_PRUNE_INTERVAL_SEC", "60")
 # Comma-separated list of allowed origins. Default "*" — wildcard origin
 # without credentials, which is spec-valid and what a public demo wants.
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+# Operational tunables — chosen for a single-robot demo; bump for fleet use.
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(64 * 1024)))  # 64 KiB
+WS_HEARTBEAT_SEC = float(os.getenv("WS_HEARTBEAT_SEC", "20"))
+WS_HEARTBEAT_TIMEOUT_SEC = float(os.getenv("WS_HEARTBEAT_TIMEOUT_SEC", "60"))
+AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "20"))
 
 
 class ConnectionManager:
@@ -262,7 +268,13 @@ class AppContext:
     def __init__(self) -> None:
         self.state_machine = StateMachine()
         self.manager = ConnectionManager()
-        self.ai = AICommander(api_key=ANTHROPIC_API_KEY)
+        self.ai = AICommander(api_key=ANTHROPIC_API_KEY, timeout_sec=AI_TIMEOUT_SEC)
+        # Marks the app as ready (lifespan started) vs alive (process up).
+        # Liveness flips False on shutdown so /readyz returns 503 and load
+        # balancers stop sending traffic during drain.
+        self.ready = False
+        # Per-client last-pong timestamps for the heartbeat sweeper.
+        self.ws_last_seen: dict[WebSocket, float] = {}
         self.ai_rate = TokenBucket(rate_per_sec=AI_RATE_PER_SEC, burst=AI_RATE_BURST)
         self.journal = Journal(JOURNAL_DB)
         self.metrics = Metrics()
@@ -272,19 +284,35 @@ class AppContext:
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
         self._prune_task: asyncio.Task[None] | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.journal.init()
         self._sensor_task = asyncio.create_task(self._sensor_loop())
         self._transition_task = asyncio.create_task(self._transition_loop())
         self._prune_task = asyncio.create_task(self._prune_loop())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        self.ready = True
 
     async def stop(self) -> None:
+        # Flip readiness first so a load balancer's next /readyz probe pulls
+        # us out of rotation before we start tearing things down. uvicorn
+        # itself owns the WS close on shutdown — it sends close code 1012
+        # ("service restart") which is the standard signal for clients to
+        # back off and reconnect. We don't try to compete with that
+        # ordering by sending our own close frame; the readiness flip plus
+        # /readyz returning 503 is the production-correct signaling path.
+        self.ready = False
         # Drain background plan executors first so they don't run against a
         # half-torn-down state machine / journal.
         for bg in list(self.background_tasks):
             bg.cancel()
-        for task in (self._sensor_task, self._transition_task, self._prune_task):
+        for task in (
+            self._sensor_task,
+            self._transition_task,
+            self._prune_task,
+            self._heartbeat_task,
+        ):
             if task:
                 task.cancel()
                 try:
@@ -296,6 +324,37 @@ class AppContext:
         if self.current_tree:
             await self.current_tree.stop()
         await self.journal.close()
+
+    async def _heartbeat_loop(self) -> None:
+        """Server-driven ping. Every WS_HEARTBEAT_SEC we send a {type:'ping'}
+        to every client; if a client hasn't sent any frame back inside
+        WS_HEARTBEAT_TIMEOUT_SEC, we evict it. Catches half-open TCP
+        connections that the OS-level keepalive would only detect after
+        minutes."""
+        while True:
+            await asyncio.sleep(WS_HEARTBEAT_SEC)
+            now = time.monotonic()
+            async with self.manager._lock:
+                sockets = list(self.manager._clients)
+            payload = json.dumps({"type": "ping"})
+            for ws in sockets:
+                last = self.ws_last_seen.get(ws, now)
+                if now - last > WS_HEARTBEAT_TIMEOUT_SEC:
+                    logger.info(
+                        "evicting stale ws", extra={"idle_sec": round(now - last, 1)}
+                    )
+                    try:
+                        await ws.close(code=1011, reason="heartbeat timeout")
+                    except Exception:
+                        pass
+                    await self.manager.disconnect(ws)
+                    self.ws_last_seen.pop(ws, None)
+                    continue
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    await self.manager.disconnect(ws)
+                    self.ws_last_seen.pop(ws, None)
 
     async def _prune_loop(self) -> None:
         while True:
@@ -354,6 +413,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="steelmind backend", lifespan=lifespan)
 
+# Order matters: outermost runs first per request.
+# 1) RequestIdMiddleware tags every request and logs it (so the size-limit
+#    rejection below still appears in the access log under a tagged id).
+# 2) RequestSizeLimitMiddleware rejects oversized bodies BEFORE the route
+#    handler touches them, so a 100 MB payload can't allocate that much
+#    memory inside the worker.
+# 3) CORSMiddleware handles preflight and tags responses.
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -374,6 +442,9 @@ def _session_key(request: Request) -> str:
 
 @app.get("/health")
 async def health() -> dict:
+    """Full-fat health/inventory endpoint. Used by /health-style consumers
+    (the frontend) that want the operational details in one call.
+    For k8s-style probes prefer /livez and /readyz."""
     return {
         "ok": True,
         "state": ctx.state_machine.state.value,
@@ -382,8 +453,27 @@ async def health() -> dict:
         "ai_history": ctx.ai.history_length(),
         "ai_sessions": ctx.ai.session_count,
         "auth_required": auth_enabled(),
+        "ready": ctx.ready,
         "time": datetime.now(UTC).isoformat(),
     }
+
+
+@app.get("/livez", include_in_schema=False)
+async def livez() -> Response:
+    """Liveness probe — cheap, returns 200 as long as the process loop is
+    answering. A liveness probe failing means k8s restarts the pod."""
+    return Response(content="ok", media_type="text/plain")
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz() -> Response:
+    """Readiness probe — 200 only when lifespan startup has completed and
+    shutdown hasn't started. A failing readiness probe makes k8s stop
+    routing traffic without restarting the pod, which is exactly what we
+    want during a graceful shutdown."""
+    if not ctx.ready:
+        return Response(content="draining", media_type="text/plain", status_code=503)
+    return Response(content="ready", media_type="text/plain")
 
 
 @app.post("/ai-reset", dependencies=[Depends(require_token)])
@@ -476,6 +566,17 @@ async def _run_behavior(name: str) -> None:
         tree = BEHAVIORS[name](ctx.state_machine)
         ctx.current_tree = tree
         tree.start()
+        # Wait for the BT's enter Action to commit the EXECUTING transition
+        # before returning so the HTTP response carries the real new state
+        # instead of the pre-execute one. Bounded so a slow BT can't hang
+        # the route.
+        for _ in range(50):
+            if (
+                ctx.state_machine.state == RobotState.EXECUTING
+                and ctx.state_machine.status.current_behavior == name
+            ):
+                break
+            await asyncio.sleep(0.01)
 
 
 @app.get("/behaviors")
@@ -632,10 +733,12 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     # require_token_ws didn't close → connection is authorized. Register
     # without re-accepting.
     await ctx.manager.attach(ws)
+    ctx.ws_last_seen[ws] = time.monotonic()
     try:
         await ws.send_text(StatusEvent(status=ctx.state_machine.status).model_dump_json())
         while True:
             raw = await ws.receive_text()
+            ctx.ws_last_seen[ws] = time.monotonic()
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -645,6 +748,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        ctx.ws_last_seen.pop(ws, None)
         await ctx.manager.disconnect(ws)
 
 
@@ -652,6 +756,10 @@ async def _handle_ws_message(ws: WebSocket, msg: dict) -> None:
     kind = msg.get("type")
     if kind == "ping":
         await ws.send_text(json.dumps({"type": "pong"}))
+    elif kind == "pong":
+        # Client-side heartbeat echo. last_seen is already updated by the
+        # outer receive loop, so we don't need to send anything back.
+        return
     elif kind == "command":
         try:
             req = CommandRequest(**msg.get("payload", {}))
