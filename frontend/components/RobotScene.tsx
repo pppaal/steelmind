@@ -260,14 +260,25 @@ export default function RobotScene({ state, sensor }: Props) {
       cancelAnimationFrame(frame);
       ro.disconnect();
       controls.dispose();
-      renderer.dispose();
-      mount.removeChild(renderer.domElement);
+      // Walk the graph and dispose every owned GPU resource. Lights, helpers
+      // (Grid/Arrow), and materials all hold resources that the renderer
+      // dispose() alone won't reclaim, so a Strict-Mode remount used to leak
+      // them.
       scene.traverse((obj) => {
-        if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
-        const mat = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        const mesh = obj as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
         if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
         else if (mat) mat.dispose();
       });
+      // GridHelper and ArrowHelper are LineSegments/Line under the hood — the
+      // traverse loop above already disposes their geometry+material, but
+      // explicit removal from the scene helps GC.
+      scene.clear();
+      renderer.dispose();
+      if (renderer.domElement.parentNode === mount) {
+        mount.removeChild(renderer.domElement);
+      }
     };
   }, []);
 

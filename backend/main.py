@@ -23,9 +23,9 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .ai_commander import AICommander, AICommanderError
+from .ai_commander import AICommander, AICommanderError, PlanStep
 from .auth import auth_enabled, require_token, require_token_ws
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
@@ -92,12 +92,15 @@ class ConnectionManager:
             return
         # Fan out in parallel so one slow client doesn't delay the broadcast
         # cadence for everyone else. Failures are collected and the dead
-        # sockets removed after the send wave completes.
+        # sockets removed after the send wave completes. Re-raise
+        # CancelledError so shutdown isn't masked by a stuck client.
         results = await asyncio.gather(
             *(ws.send_text(message) for ws in targets), return_exceptions=True
         )
         for ws, result in zip(targets, results, strict=True):
-            if isinstance(result, BaseException):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
                 await self.disconnect(ws)
 
     @property
@@ -277,13 +280,19 @@ class AppContext:
         self._prune_task = asyncio.create_task(self._prune_loop())
 
     async def stop(self) -> None:
+        # Drain background plan executors first so they don't run against a
+        # half-torn-down state machine / journal.
+        for bg in list(self.background_tasks):
+            bg.cancel()
         for task in (self._sensor_task, self._transition_task, self._prune_task):
             if task:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception:
+                    logger.exception("background task raised during shutdown")
         if self.current_tree:
             await self.current_tree.stop()
         await self.journal.close()
@@ -485,7 +494,7 @@ class AICommandRequest(BaseModel):
 
 class AIPlanStepResult(BaseModel):
     command: str
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
     executed: bool
     detail: str | None = None
 
@@ -595,7 +604,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
     )
 
 
-async def _execute_plan(steps: list) -> None:
+async def _execute_plan(steps: list[PlanStep]) -> None:
     for step in steps:
         try:
             await _dispatch_command(CommandRequest(command=step.command, params=step.params))

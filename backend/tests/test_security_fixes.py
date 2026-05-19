@@ -34,9 +34,8 @@ def test_ws_rejected_when_auth_enabled_no_token(
     # WebSocketTestClient surfaces a close as WebSocketDisconnect.
     from starlette.websockets import WebSocketDisconnect
 
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()
+    with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws") as ws:
+        ws.receive_json()
 
 
 def test_ws_accepted_with_query_token(
@@ -54,9 +53,8 @@ def test_ws_rejected_with_wrong_token(
     monkeypatch.setenv("API_TOKEN", "topsecret")
     from starlette.websockets import WebSocketDisconnect
 
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/ws?token=wrong") as ws:
-            ws.receive_json()
+    with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws?token=wrong") as ws:
+        ws.receive_json()
 
 
 def test_journal_endpoints_require_token_when_enabled(
@@ -83,7 +81,7 @@ async def test_broadcast_uses_parallel_gather() -> None:
     slow = AsyncMock()
     slow.send_text = slow_send
     # Bypass the lock-protected setter; we're just smoke-testing the fan-out.
-    mgr._clients = {fast, slow}  # noqa: SLF001
+    mgr._clients = {fast, slow}
     await mgr.broadcast({"type": "test"})
     fast.send_text.assert_awaited_once()
     assert slow_calls == ["called"]
@@ -95,11 +93,11 @@ async def test_broadcast_drops_failed_clients() -> None:
     good = AsyncMock()
     bad = AsyncMock()
     bad.send_text.side_effect = RuntimeError("network gone")
-    mgr._clients = {good, bad}  # noqa: SLF001
+    mgr._clients = {good, bad}
     await mgr.broadcast({"type": "test"})
     # Both got send attempts...
     good.send_text.assert_awaited_once()
     bad.send_text.assert_awaited_once()
     # ...and the failed one was evicted.
-    assert good in mgr._clients  # noqa: SLF001
-    assert bad not in mgr._clients  # noqa: SLF001
+    assert good in mgr._clients
+    assert bad not in mgr._clients

@@ -88,6 +88,10 @@ class AIPlanResult(BaseModel):
 
     @property
     def first(self) -> PlanStep:
+        if not self.steps:
+            # The tool schema enforces minItems=1, but defend against a model
+            # that somehow returns an empty plan rather than IndexError.
+            raise AICommanderError("plan has no steps")
         return self.steps[0]
 
 
