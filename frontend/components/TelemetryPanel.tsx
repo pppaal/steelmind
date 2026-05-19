@@ -1,12 +1,14 @@
 "use client";
 
-import type { ConnectionState } from "@/lib/useRobotSocket";
+import Sparkline from "./Sparkline";
+import type { ConnectionState, SensorHistory } from "@/lib/useRobotSocket";
 import { STATE_COLORS, type RobotStatus, type SensorData } from "@/lib/types";
 
 interface Props {
   connection: ConnectionState;
   status: RobotStatus | null;
   sensor: SensorData | null;
+  history: SensorHistory;
   lastReason: string | null;
 }
 
@@ -33,7 +35,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export default function TelemetryPanel({ connection, status, sensor, lastReason }: Props) {
+export default function TelemetryPanel({ connection, status, sensor, history, lastReason }: Props) {
   const state = status?.state ?? "IDLE";
   const stateColor = STATE_COLORS[state];
 
@@ -87,16 +89,19 @@ export default function TelemetryPanel({ connection, status, sensor, lastReason 
         <Row label="error" value={status?.error ?? "—"} />
       </Section>
 
-      <Section title="IMU — Orientation">
-        <Row label="x" value={fmt(sensor?.imu_orientation.x)} />
-        <Row label="y" value={fmt(sensor?.imu_orientation.y)} />
-        <Row label="z" value={fmt(sensor?.imu_orientation.z)} />
+      <Section title="IMU — Orientation X">
+        <Row label="current" value={fmt(sensor?.imu_orientation.x)} />
+        <Sparkline data={history.orientX} domain={[-0.6, 0.6]} zeroLine color="#38bdf8" fill="rgba(56,189,248,0.15)" />
       </Section>
 
-      <Section title="IMU — Angular Velocity">
-        <Row label="x" value={fmt(sensor?.imu_angular_velocity.x)} />
-        <Row label="y" value={fmt(sensor?.imu_angular_velocity.y)} />
-        <Row label="z" value={fmt(sensor?.imu_angular_velocity.z)} />
+      <Section title="IMU — Orientation Y">
+        <Row label="current" value={fmt(sensor?.imu_orientation.y)} />
+        <Sparkline data={history.orientY} domain={[-0.6, 0.6]} zeroLine color="#a78bfa" fill="rgba(167,139,250,0.15)" />
+      </Section>
+
+      <Section title="IMU — Angular Velocity X">
+        <Row label="current" value={fmt(sensor?.imu_angular_velocity.x)} />
+        <Sparkline data={history.angVelX} domain={[-0.6, 0.6]} zeroLine color="#f472b6" fill="rgba(244,114,182,0.15)" />
       </Section>
 
       <Section title="IMU — Linear Acceleration">
@@ -114,6 +119,7 @@ export default function TelemetryPanel({ connection, status, sensor, lastReason 
       <Section title="Battery">
         <Row label="voltage" value={`${fmt(sensor?.battery_voltage, 2)} V`} />
         <Row label="percent" value={`${fmt(sensor?.battery_percent, 1)} %`} />
+        <Sparkline data={history.battery} domain={[0, 100]} color="#34d399" fill="rgba(52,211,153,0.15)" />
       </Section>
     </aside>
   );

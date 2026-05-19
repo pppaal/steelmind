@@ -17,7 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .ai_commander import AICommander, AICommanderError
-from .behavior_tree import Action, BehaviorTree, NodeStatus, Sequence
+from .behavior_tree import BehaviorTree
+from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -71,30 +72,72 @@ class ConnectionManager:
         return len(self._clients)
 
 
-def simulate_sensor(t: float, state: RobotState) -> SensorData:
-    walking = state == RobotState.WALKING
-    amp = 0.2 if walking else 0.02
+def simulate_sensor(t: float, state: RobotState, behavior: str | None) -> SensorData:
+    hip_left = 0.0
+    hip_right = 0.0
+    knee_left = 0.0
+    knee_right = 0.0
+    shoulder_left = 0.0
+    shoulder_right = 0.0
+    body_tilt_x = 0.0
+    body_tilt_y = 0.0
+
+    if state == RobotState.WALKING:
+        hip_left = 0.4 * math.sin(t * 3)
+        hip_right = -0.4 * math.sin(t * 3)
+        knee_left = 0.3 * max(0.0, math.cos(t * 3))
+        knee_right = 0.3 * max(0.0, -math.cos(t * 3))
+        shoulder_left = -0.3 * math.sin(t * 3)
+        shoulder_right = 0.3 * math.sin(t * 3)
+        body_tilt_x = 0.08 * math.sin(t * 3)
+    elif state == RobotState.EXECUTING and behavior == "wave":
+        shoulder_right = -1.6 + 0.4 * math.sin(t * 6)
+        shoulder_left = 0.05 * math.sin(t * 6)
+    elif state == RobotState.EXECUTING and behavior == "squat":
+        depth = 0.5 * (1 - math.cos(t * 2)) / 2
+        hip_left = depth
+        hip_right = depth
+        knee_left = -depth * 1.6
+        knee_right = -depth * 1.6
+    elif state == RobotState.EXECUTING and behavior == "patrol":
+        hip_left = 0.45 * math.sin(t * 4)
+        hip_right = -0.45 * math.sin(t * 4)
+        knee_left = 0.35 * max(0.0, math.cos(t * 4))
+        knee_right = 0.35 * max(0.0, -math.cos(t * 4))
+        body_tilt_y = 0.4 * math.sin(t * 0.6)
+    elif state == RobotState.EXECUTING and behavior == "dance":
+        hip_left = 0.25 * math.sin(t * 5)
+        hip_right = -0.25 * math.sin(t * 5)
+        shoulder_left = -0.9 + 0.6 * math.sin(t * 5)
+        shoulder_right = -0.9 - 0.6 * math.sin(t * 5)
+        body_tilt_x = 0.15 * math.sin(t * 2.5)
+    elif state == RobotState.EXECUTING:
+        shoulder_left = 0.15 * math.sin(t * 3)
+        shoulder_right = -0.15 * math.sin(t * 3)
+    elif state == RobotState.STANDING:
+        body_tilt_x = 0.01 * math.sin(t * 1.2)
+    else:  # IDLE
+        body_tilt_x = 0.005 * math.sin(t * 0.8)
+
     return SensorData(
-        imu_orientation=Vector3(
-            x=amp * math.sin(t),
-            y=amp * math.cos(t * 0.8),
-            z=0.0,
-        ),
+        imu_orientation=Vector3(x=body_tilt_x, y=body_tilt_y, z=0.0),
         imu_angular_velocity=Vector3(
-            x=amp * math.cos(t),
-            y=-amp * math.sin(t),
+            x=body_tilt_x * math.cos(t),
+            y=body_tilt_y * math.cos(t),
             z=0.0,
         ),
         imu_linear_acceleration=Vector3(z=9.81 + random.uniform(-0.05, 0.05)),
         joint_positions={
-            "hip_left": amp * math.sin(t),
-            "hip_right": -amp * math.sin(t),
-            "knee_left": amp * math.cos(t),
-            "knee_right": -amp * math.cos(t),
+            "hip_left": hip_left,
+            "hip_right": hip_right,
+            "knee_left": knee_left,
+            "knee_right": knee_right,
+            "shoulder_left": shoulder_left,
+            "shoulder_right": shoulder_right,
         },
         joint_velocities={
-            "hip_left": amp * math.cos(t),
-            "hip_right": -amp * math.cos(t),
+            "hip_left": hip_left,
+            "hip_right": hip_right,
         },
         battery_voltage=24.0 + random.uniform(-0.1, 0.1),
         battery_percent=max(0.0, 100.0 - (t * 0.01) % 100.0),
@@ -129,7 +172,8 @@ class AppContext:
         period = 1.0 / SENSOR_HZ
         t = 0.0
         while True:
-            data = simulate_sensor(t, self.state_machine.state)
+            status = self.state_machine.status
+            data = simulate_sensor(t, status.state, status.current_behavior)
             await self.manager.broadcast(SensorEvent(data=data))
             t += period
             await asyncio.sleep(period)
@@ -198,7 +242,9 @@ async def command(req: CommandRequest) -> CommandResponse:
             await ctx.state_machine.transition(RobotState.STANDING, reason="command:stop")
         elif cmd == "execute":
             behavior = req.params.get("behavior", "demo")
-            await _run_demo_behavior(behavior)
+            if behavior not in BEHAVIORS:
+                raise HTTPException(status_code=400, detail=f"unknown behavior: {behavior}")
+            await _run_behavior(behavior)
         else:
             raise HTTPException(status_code=400, detail=f"unknown command: {req.command}")
     except InvalidTransitionError as e:
@@ -206,36 +252,22 @@ async def command(req: CommandRequest) -> CommandResponse:
     return CommandResponse(ok=True, message=f"{cmd} accepted", status=ctx.state_machine.status)
 
 
-async def _run_demo_behavior(name: str) -> None:
+async def _run_behavior(name: str) -> None:
     if ctx.current_tree and ctx.current_tree.is_running:
         await ctx.current_tree.stop()
-
-    async def enter_executing() -> NodeStatus:
-        await ctx.state_machine.transition(RobotState.EXECUTING, reason=f"behavior:{name}")
-        ctx.state_machine.set_behavior(name)
-        return NodeStatus.SUCCESS
-
-    async def do_work() -> NodeStatus:
-        await asyncio.sleep(1.0)
-        return NodeStatus.SUCCESS
-
-    async def exit_to_standing() -> NodeStatus:
-        ctx.state_machine.set_behavior(None)
-        await ctx.state_machine.transition(RobotState.STANDING, reason=f"behavior:{name}:done")
-        return NodeStatus.SUCCESS
-
-    tree = BehaviorTree(
-        Sequence(
-            name,
-            [
-                Action("enter", enter_executing),
-                Action("work", do_work),
-                Action("exit", exit_to_standing),
-            ],
-        )
-    )
+    tree = BEHAVIORS[name](ctx.state_machine)
     ctx.current_tree = tree
     tree.start()
+
+
+@app.get("/behaviors")
+async def list_behaviors() -> dict:
+    return {
+        "behaviors": [
+            {"name": name, "description": BEHAVIOR_DESCRIPTIONS.get(name, "")}
+            for name in BEHAVIORS.keys()
+        ]
+    }
 
 
 class AICommandRequest(BaseModel):

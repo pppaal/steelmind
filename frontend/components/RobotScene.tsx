@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { RobotState, SensorData } from "@/lib/types";
 import { STATE_COLORS } from "@/lib/types";
 
@@ -117,27 +118,55 @@ export default function RobotScene({ state, sensor }: Props) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
     mount.appendChild(renderer.domElement);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-    const key = new THREE.DirectionalLight(0xffffff, 1.0);
-    key.position.set(5, 8, 4);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 2;
+    controls.maxDistance = 12;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
+    controls.target.set(0, 1.2, 0);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const key = new THREE.DirectionalLight(0xffffff, 1.2);
+    key.position.set(5, 9, 4);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.left = -6;
+    key.shadow.camera.right = 6;
+    key.shadow.camera.top = 6;
+    key.shadow.camera.bottom = -6;
+    key.shadow.bias = -0.0005;
     scene.add(key);
-    const rim = new THREE.DirectionalLight(0x88aaff, 0.6);
+    const rim = new THREE.DirectionalLight(0x88aaff, 0.7);
     rim.position.set(-4, 3, -3);
     scene.add(rim);
 
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(20, 20),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.9 }),
+      new THREE.PlaneGeometry(40, 40),
+      new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.85, metalness: 0.15 }),
     );
     floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
     scene.add(floor);
 
-    const grid = new THREE.GridHelper(20, 20, 0x1f2937, 0x1f2937);
+    const grid = new THREE.GridHelper(20, 20, 0x1e293b, 0x1e293b);
+    (grid.material as THREE.Material).transparent = true;
+    (grid.material as THREE.Material).opacity = 0.6;
     scene.add(grid);
 
     const rig = buildRig();
+    rig.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
     scene.add(rig.group);
 
     const clock = new THREE.Clock();
@@ -178,8 +207,10 @@ export default function RobotScene({ state, sensor }: Props) {
       rig.joints.hipRight.rotation.x = jp?.hip_right ?? fallbackHipR;
       rig.joints.kneeLeft.rotation.x = -Math.abs(jp?.knee_left ?? fallbackKneeL);
       rig.joints.kneeRight.rotation.x = -Math.abs(jp?.knee_right ?? fallbackKneeR);
-      rig.joints.shoulderLeft.rotation.x = -(jp?.hip_left ?? fallbackHipL) * 0.6;
-      rig.joints.shoulderRight.rotation.x = -(jp?.hip_right ?? fallbackHipR) * 0.6;
+      rig.joints.shoulderLeft.rotation.x =
+        jp?.shoulder_left ?? -(jp?.hip_left ?? fallbackHipL) * 0.6;
+      rig.joints.shoulderRight.rotation.x =
+        jp?.shoulder_right ?? -(jp?.hip_right ?? fallbackHipR) * 0.6;
 
       if (sd?.imu_orientation) {
         rig.group.rotation.x = sd.imu_orientation.x * 0.3;
@@ -188,6 +219,7 @@ export default function RobotScene({ state, sensor }: Props) {
 
       rig.group.position.y = s === "IDLE" ? -0.05 + Math.sin(t * 1.5) * 0.02 : 0;
 
+      controls.update();
       renderer.render(scene, camera);
     };
     animate();
@@ -195,6 +227,7 @@ export default function RobotScene({ state, sensor }: Props) {
     return () => {
       cancelAnimationFrame(frame);
       ro.disconnect();
+      controls.dispose();
       renderer.dispose();
       mount.removeChild(renderer.domElement);
       scene.traverse((obj) => {

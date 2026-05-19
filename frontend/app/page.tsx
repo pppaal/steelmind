@@ -1,16 +1,20 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useMemo } from "react";
 import AICommandInput from "@/components/AICommandInput";
 import CommandBar from "@/components/CommandBar";
+import EventLog from "@/components/EventLog";
 import TelemetryPanel from "@/components/TelemetryPanel";
+import { deriveApiBase } from "@/lib/api";
 import { useRobotSocket } from "@/lib/useRobotSocket";
 
 const RobotScene = dynamic(() => import("@/components/RobotScene"), { ssr: false });
 
 export default function Page() {
-  const { connection, status, sensor, lastReason, sendCommand } = useRobotSocket();
+  const { connection, status, sensor, history, log, lastReason, sendCommand } = useRobotSocket();
   const state = status?.state ?? "IDLE";
+  const apiBase = useMemo(() => deriveApiBase(), []);
 
   return (
     <main className="flex h-screen w-screen flex-col bg-zinc-950 text-zinc-100">
@@ -29,13 +33,15 @@ export default function Page() {
         <div className="relative min-h-0 flex-1">
           <RobotScene state={state} sensor={sensor} />
           <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-zinc-800 bg-zinc-950/80 px-3 py-2 font-mono text-[11px] text-zinc-400">
-            FPS-locked · WebGL · {connection}
+            drag · zoom · {connection}
           </div>
+          <EventLog entries={log} />
         </div>
         <TelemetryPanel
           connection={connection}
           status={status}
           sensor={sensor}
+          history={history}
           lastReason={lastReason}
         />
       </div>
@@ -44,7 +50,12 @@ export default function Page() {
         <AICommandInput />
       </div>
 
-      <CommandBar state={state} disabled={connection !== "open"} onCommand={sendCommand} />
+      <CommandBar
+        state={state}
+        disabled={connection !== "open"}
+        onCommand={sendCommand}
+        apiBase={apiBase}
+      />
     </main>
   );
 }

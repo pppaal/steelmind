@@ -6,6 +6,7 @@ from typing import Any
 from anthropic import APIError, AsyncAnthropic
 from pydantic import BaseModel, Field
 
+from .behaviors import BEHAVIOR_DESCRIPTIONS
 from .models import RobotStatus
 
 logger = logging.getLogger("steelmind.ai")
@@ -20,6 +21,9 @@ SYSTEM_PROMPT = """너는 휴머노이드 로봇 제어 AI다.
 - walk: 걷는다. STANDING 에서만 가능. IDLE 이면 먼저 stand 가 필요하니 stand 를 선택한다.
 - idle: 휴식/앉기 자세. STANDING / WALKING / EXECUTING 에서 IDLE 로 전환.
 - execute: 정의된 behavior 를 실행한다. params.behavior 에 이름을 넣는다 (없으면 "demo").
+
+사용 가능한 behavior:
+{behaviors}
 
 규칙:
 1. 입력이 모호하거나 여러 동작을 요구하면 "다음에 해야 할 한 단계"만 고른다.
@@ -70,6 +74,8 @@ class AICommander:
         else:
             self._client = AsyncAnthropic(api_key=api_key)
         self.model = model
+        behaviors_block = "\n".join(f"  - {n}: {d}" for n, d in BEHAVIOR_DESCRIPTIONS.items())
+        self._system_prompt = SYSTEM_PROMPT.format(behaviors=behaviors_block)
 
     @property
     def enabled(self) -> bool:
@@ -93,7 +99,7 @@ class AICommander:
                 system=[
                     {
                         "type": "text",
-                        "text": SYSTEM_PROMPT,
+                        "text": self._system_prompt,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],

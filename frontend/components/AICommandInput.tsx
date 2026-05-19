@@ -1,19 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { deriveApiBase } from "@/lib/api";
 import type { AICommandResponse } from "@/lib/types";
-
-function deriveApiBase(): string {
-  const ws = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
-  try {
-    const url = new URL(ws);
-    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-    url.pathname = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return "http://localhost:8000";
-  }
-}
 
 interface Bubble {
   id: number;
