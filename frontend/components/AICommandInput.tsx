@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { deriveApiBase } from "@/lib/api";
+import { authHeaders, deriveApiBase } from "@/lib/api";
 import { getSessionId } from "@/lib/session";
 import type { AICommandResponse } from "@/lib/types";
 
@@ -44,6 +44,7 @@ export default function AICommandInput() {
         headers: {
           "Content-Type": "application/json",
           "X-Session-Id": getSessionId(),
+          ...authHeaders(),
         },
         body: JSON.stringify({ text: value }),
       });
@@ -145,7 +146,7 @@ export default function AICommandInput() {
           onClick={() => {
             void fetch(`${apiBase.current}/ai-reset`, {
               method: "POST",
-              headers: { "X-Session-Id": getSessionId() },
+              headers: { "X-Session-Id": getSessionId(), ...authHeaders() },
             }).catch(() => {});
           }}
           disabled={loading}

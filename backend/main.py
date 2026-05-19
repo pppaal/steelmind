@@ -13,14 +13,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .ai_commander import AICommander, AICommanderError
+from .auth import auth_enabled, require_token
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .journal import Journal
+from .logging_setup import configure as configure_logging
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -36,8 +46,8 @@ from .state_machine import InvalidTransitionError, StateMachine
 
 load_dotenv(Path(__file__).parent / ".env")
 
+configure_logging()
 logger = logging.getLogger("steelmind")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 
 SENSOR_HZ = float(os.getenv("SENSOR_HZ", "20"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -345,11 +355,12 @@ async def health() -> dict:
         "ai_enabled": ctx.ai.enabled,
         "ai_history": ctx.ai.history_length(),
         "ai_sessions": ctx.ai.session_count,
+        "auth_required": auth_enabled(),
         "time": datetime.now(UTC).isoformat(),
     }
 
 
-@app.post("/ai-reset")
+@app.post("/ai-reset", dependencies=[Depends(require_token)])
 async def ai_reset(request: Request) -> dict:
     sid = request.headers.get("x-session-id")
     ctx.ai.reset_history(sid[:64] if sid else None)
@@ -386,7 +397,7 @@ async def status() -> dict:
     return ctx.state_machine.status.model_dump()
 
 
-@app.post("/command", response_model=CommandResponse)
+@app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_token)])
 async def command(req: CommandRequest) -> CommandResponse:
     cmd = req.command.lower()
     try:
@@ -453,8 +464,18 @@ class AICommandResponse(BaseModel):
     repaired: bool = False
 
 
-@app.post("/ai-command", response_model=AICommandResponse)
+@app.post(
+    "/ai-command",
+    response_model=AICommandResponse,
+    dependencies=[Depends(require_token)],
+)
 async def ai_command(req: AICommandRequest, request: Request) -> AICommandResponse:
+    text_preview = (req.text or "").strip()
+    if not text_preview:
+        raise HTTPException(status_code=400, detail="text is required")
+    if len(text_preview) > 500:
+        raise HTTPException(status_code=413, detail="text too long (max 500 chars)")
+
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
 
@@ -468,9 +489,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
             headers={"Retry-After": f"{retry_after:.1f}"},
         )
 
-    text = (req.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
+    text = text_preview
 
     session = _session_key(request)
     repaired = False
