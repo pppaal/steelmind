@@ -113,7 +113,9 @@ class AICommander:
     def enabled(self) -> bool:
         return self._client is not None
 
-    async def translate(self, text: str, status: RobotStatus) -> AIPlanResult:
+    async def translate(
+        self, text: str, status: RobotStatus, repair_context: str | None = None
+    ) -> AIPlanResult:
         if self._client is None:
             raise AICommanderError("ANTHROPIC_API_KEY is not configured")
 
@@ -131,11 +133,20 @@ class AICommander:
                 }
             )
 
+        repair_block = ""
+        if repair_context:
+            repair_block = (
+                "\n\n이전 계획이 거절된 이유:\n"
+                f"{repair_context}\n"
+                "거절된 단계를 피해서 새로운 유효한 계획을 만들어라."
+            )
+
         user_content = (
             f"현재 로봇 상태: {status.state.value}\n"
             f"이전 상태: {status.previous_state.value if status.previous_state else 'none'}\n"
             f"현재 behavior: {status.current_behavior or 'none'}\n"
             f"\n사용자 입력: {text}"
+            f"{repair_block}"
         )
         messages.append({"role": "user", "content": user_content})
 
@@ -165,7 +176,10 @@ class AICommander:
                     result = AIPlanResult(**data)
                 except Exception as e:
                     raise AICommanderError(f"invalid tool input: {data!r}") from e
-                self._history.append((text, data))
+                # Only commit successful first-pass plans to history; repair
+                # attempts are inputs, not turns the user actually said.
+                if repair_context is None:
+                    self._history.append((text, data))
                 return result
 
         raise AICommanderError("model did not produce a tool_use block")

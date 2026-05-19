@@ -75,3 +75,24 @@ def test_health_exposes_ai_fields(client: TestClient) -> None:
     body = client.get("/health").json()
     assert "ai_enabled" in body
     assert "ai_history" in body
+
+
+def test_metrics_endpoint(client: TestClient) -> None:
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert "text/plain" in r.headers["content-type"]
+    body = r.text
+    assert "steelmind_transitions_total" in body
+    assert "steelmind_ws_clients" in body
+
+
+def test_journal_endpoints(client: TestClient) -> None:
+    # Drive a couple of transitions so the journal has something to return.
+    client.post("/command", json={"command": "stop", "params": {}})
+    client.post("/command", json={"command": "idle", "params": {}})
+    client.post("/command", json={"command": "stand", "params": {}})
+
+    counts = client.get("/journal/counts").json()
+    assert counts["transitions"] >= 1
+    transitions = client.get("/journal/transitions?limit=5").json()["transitions"]
+    assert isinstance(transitions, list)

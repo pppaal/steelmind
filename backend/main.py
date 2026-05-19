@@ -12,13 +12,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .ai_commander import AICommander, AICommanderError
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
+from .journal import Journal
 from .models import (
     CommandRequest,
     CommandResponse,
@@ -28,6 +29,7 @@ from .models import (
     StatusEvent,
     Vector3,
 )
+from .plan_validator import validate_plan
 from .rate_limit import TokenBucket
 from .state_machine import InvalidTransitionError, StateMachine
 
@@ -40,6 +42,7 @@ SENSOR_HZ = float(os.getenv("SENSOR_HZ", "20"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 AI_RATE_PER_SEC = float(os.getenv("AI_RATE_PER_SEC", "0.5"))  # 1 call / 2s sustained
 AI_RATE_BURST = float(os.getenv("AI_RATE_BURST", "3"))
+JOURNAL_DB = os.getenv("JOURNAL_DB", "steelmind.db")
 
 
 class ConnectionManager:
@@ -146,18 +149,63 @@ def simulate_sensor(t: float, state: RobotState, behavior: str | None) -> Sensor
     )
 
 
+class Metrics:
+    """Tiny counter set rendered as Prometheus text on /metrics."""
+
+    def __init__(self) -> None:
+        self.transitions_total = 0
+        self.ai_commands_total = 0
+        self.ai_repairs_total = 0
+        self.ai_errors_total = 0
+        self.rate_limited_total = 0
+        self.sensor_frames_total = 0
+
+    def render(self, *, ws_clients: int, ai_history: int) -> str:
+        lines = [
+            "# HELP steelmind_transitions_total Total state transitions broadcast.",
+            "# TYPE steelmind_transitions_total counter",
+            f"steelmind_transitions_total {self.transitions_total}",
+            "# HELP steelmind_ai_commands_total AI commander requests successfully translated.",
+            "# TYPE steelmind_ai_commands_total counter",
+            f"steelmind_ai_commands_total {self.ai_commands_total}",
+            "# HELP steelmind_ai_repairs_total AI plans repaired after validator rejection.",
+            "# TYPE steelmind_ai_repairs_total counter",
+            f"steelmind_ai_repairs_total {self.ai_repairs_total}",
+            "# HELP steelmind_ai_errors_total AI commander upstream/translation errors.",
+            "# TYPE steelmind_ai_errors_total counter",
+            f"steelmind_ai_errors_total {self.ai_errors_total}",
+            "# HELP steelmind_rate_limited_total AI requests rejected by the rate limiter.",
+            "# TYPE steelmind_rate_limited_total counter",
+            f"steelmind_rate_limited_total {self.rate_limited_total}",
+            "# HELP steelmind_sensor_frames_total Sensor frames broadcast over /ws.",
+            "# TYPE steelmind_sensor_frames_total counter",
+            f"steelmind_sensor_frames_total {self.sensor_frames_total}",
+            "# HELP steelmind_ws_clients Current connected WebSocket clients.",
+            "# TYPE steelmind_ws_clients gauge",
+            f"steelmind_ws_clients {ws_clients}",
+            "# HELP steelmind_ai_history AI conversation memory turns.",
+            "# TYPE steelmind_ai_history gauge",
+            f"steelmind_ai_history {ai_history}",
+            "",
+        ]
+        return "\n".join(lines)
+
+
 class AppContext:
     def __init__(self) -> None:
         self.state_machine = StateMachine()
         self.manager = ConnectionManager()
         self.ai = AICommander(api_key=ANTHROPIC_API_KEY)
         self.ai_rate = TokenBucket(rate_per_sec=AI_RATE_PER_SEC, burst=AI_RATE_BURST)
+        self.journal = Journal(JOURNAL_DB)
+        self.metrics = Metrics()
         self.background_tasks: set[asyncio.Task[None]] = set()
         self.current_tree: BehaviorTree | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        await self.journal.init()
         self._sensor_task = asyncio.create_task(self._sensor_loop())
         self._transition_task = asyncio.create_task(self._transition_loop())
 
@@ -179,6 +227,7 @@ class AppContext:
             status = self.state_machine.status
             data = simulate_sensor(t, status.state, status.current_behavior)
             await self.manager.broadcast(SensorEvent(data=data))
+            self.metrics.sensor_frames_total += 1
             t += period
             await asyncio.sleep(period)
 
@@ -189,6 +238,13 @@ class AppContext:
                 event = await queue.get()
                 await self.manager.broadcast(event)
                 await self.manager.broadcast(StatusEvent(status=self.state_machine.status))
+                self.metrics.transitions_total += 1
+                try:
+                    await self.journal.record_transition(
+                        event.from_state.value, event.to_state.value, event.reason
+                    )
+                except Exception:
+                    logger.exception("journal record_transition failed")
         finally:
             self.state_machine.unsubscribe(queue)
 
@@ -233,6 +289,30 @@ async def health() -> dict:
 async def ai_reset() -> dict:
     ctx.ai.reset_history()
     return {"ok": True, "ai_history": ctx.ai.history_length}
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    body = ctx.metrics.render(
+        ws_clients=ctx.manager.count,
+        ai_history=ctx.ai.history_length,
+    )
+    return Response(content=body, media_type="text/plain; version=0.0.4")
+
+
+@app.get("/journal/transitions")
+async def journal_transitions(limit: int = 100) -> dict:
+    return {"transitions": await ctx.journal.list_transitions(limit=min(limit, 1000))}
+
+
+@app.get("/journal/ai-commands")
+async def journal_ai_commands(limit: int = 100) -> dict:
+    return {"ai_commands": await ctx.journal.list_ai_commands(limit=min(limit, 1000))}
+
+
+@app.get("/journal/counts")
+async def journal_counts() -> dict:
+    return await ctx.journal.counts()
 
 
 @app.get("/status")
@@ -314,6 +394,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
     client_key = request.client.host if request.client else "unknown"
     allowed, retry_after = await ctx.ai_rate.allow(client_key)
     if not allowed:
+        ctx.metrics.rate_limited_total += 1
         raise HTTPException(
             status_code=429,
             detail=f"rate limited; retry in {retry_after:.1f}s",
@@ -324,10 +405,31 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
+    repaired = False
     try:
         plan = await ctx.ai.translate(text, ctx.state_machine.status)
+        ok, error = validate_plan(plan.steps, ctx.state_machine.state)
+        if not ok and error:
+            logger.info("plan invalid, repairing: %s", error)
+            plan = await ctx.ai.translate(
+                text, ctx.state_machine.status, repair_context=error
+            )
+            repaired = True
+            ctx.metrics.ai_repairs_total += 1
     except AICommanderError as e:
+        ctx.metrics.ai_errors_total += 1
         raise HTTPException(status_code=502, detail=str(e)) from e
+
+    ctx.metrics.ai_commands_total += 1
+    try:
+        await ctx.journal.record_ai_command(
+            text=text,
+            plan={"steps": [s.model_dump() for s in plan.steps], "explanation": plan.explanation},
+            explanation=plan.explanation,
+            repaired=repaired,
+        )
+    except Exception:
+        logger.exception("journal record_ai_command failed")
 
     await ctx.manager.broadcast(
         {
@@ -337,6 +439,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
             "params": plan.first.params,
             "explanation": plan.explanation,
             "step_count": len(plan.steps),
+            "repaired": repaired,
         }
     )
 

@@ -57,6 +57,7 @@ export interface AICommandEvent {
   params: Record<string, unknown>;
   explanation: string;
   step_count?: number;
+  repaired?: boolean;
 }
 
 export interface PlanCompletedEvent {
