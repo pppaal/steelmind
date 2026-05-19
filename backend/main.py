@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import random
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -43,6 +44,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 AI_RATE_PER_SEC = float(os.getenv("AI_RATE_PER_SEC", "0.5"))  # 1 call / 2s sustained
 AI_RATE_BURST = float(os.getenv("AI_RATE_BURST", "3"))
 JOURNAL_DB = os.getenv("JOURNAL_DB", "steelmind.db")
+JOURNAL_KEEP_TRANSITIONS = int(os.getenv("JOURNAL_KEEP_TRANSITIONS", "5000"))
+JOURNAL_KEEP_AI = int(os.getenv("JOURNAL_KEEP_AI", "1000"))
+JOURNAL_PRUNE_INTERVAL_SEC = float(os.getenv("JOURNAL_PRUNE_INTERVAL_SEC", "60"))
 
 
 class ConnectionManager:
@@ -149,8 +153,11 @@ def simulate_sensor(t: float, state: RobotState, behavior: str | None) -> Sensor
     )
 
 
+AI_LATENCY_BUCKETS_MS = (50, 100, 250, 500, 1000, 2000, 5000, 10000)
+
+
 class Metrics:
-    """Tiny counter set rendered as Prometheus text on /metrics."""
+    """Tiny counter+histogram set rendered as Prometheus text on /metrics."""
 
     def __init__(self) -> None:
         self.transitions_total = 0
@@ -159,8 +166,37 @@ class Metrics:
         self.ai_errors_total = 0
         self.rate_limited_total = 0
         self.sensor_frames_total = 0
+        # AI latency histogram: cumulative counts per upper bound (ms).
+        self._latency_bucket_counts = [0] * len(AI_LATENCY_BUCKETS_MS)
+        self._latency_overflow = 0
+        self._latency_sum_ms = 0.0
+        self._latency_count = 0
 
-    def render(self, *, ws_clients: int, ai_history: int) -> str:
+    def observe_ai_latency_ms(self, ms: float) -> None:
+        self._latency_sum_ms += ms
+        self._latency_count += 1
+        for i, upper in enumerate(AI_LATENCY_BUCKETS_MS):
+            if ms <= upper:
+                self._latency_bucket_counts[i] += 1
+                return
+        self._latency_overflow += 1
+
+    def _histogram_lines(self) -> list[str]:
+        lines = [
+            "# HELP steelmind_ai_latency_ms AI commander translate() wall time.",
+            "# TYPE steelmind_ai_latency_ms histogram",
+        ]
+        cumulative = 0
+        for i, upper in enumerate(AI_LATENCY_BUCKETS_MS):
+            cumulative += self._latency_bucket_counts[i]
+            lines.append(f'steelmind_ai_latency_ms_bucket{{le="{upper}"}} {cumulative}')
+        cumulative += self._latency_overflow
+        lines.append(f'steelmind_ai_latency_ms_bucket{{le="+Inf"}} {cumulative}')
+        lines.append(f"steelmind_ai_latency_ms_sum {self._latency_sum_ms:.3f}")
+        lines.append(f"steelmind_ai_latency_ms_count {self._latency_count}")
+        return lines
+
+    def render(self, *, ws_clients: int, ai_history: int, ai_sessions: int) -> str:
         lines = [
             "# HELP steelmind_transitions_total Total state transitions broadcast.",
             "# TYPE steelmind_transitions_total counter",
@@ -183,9 +219,13 @@ class Metrics:
             "# HELP steelmind_ws_clients Current connected WebSocket clients.",
             "# TYPE steelmind_ws_clients gauge",
             f"steelmind_ws_clients {ws_clients}",
-            "# HELP steelmind_ai_history AI conversation memory turns.",
+            "# HELP steelmind_ai_history Total AI conversation memory turns across sessions.",
             "# TYPE steelmind_ai_history gauge",
             f"steelmind_ai_history {ai_history}",
+            "# HELP steelmind_ai_sessions Distinct AI conversation sessions.",
+            "# TYPE steelmind_ai_sessions gauge",
+            f"steelmind_ai_sessions {ai_sessions}",
+            *self._histogram_lines(),
             "",
         ]
         return "\n".join(lines)
@@ -203,14 +243,16 @@ class AppContext:
         self.current_tree: BehaviorTree | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
+        self._prune_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.journal.init()
         self._sensor_task = asyncio.create_task(self._sensor_loop())
         self._transition_task = asyncio.create_task(self._transition_loop())
+        self._prune_task = asyncio.create_task(self._prune_loop())
 
     async def stop(self) -> None:
-        for task in (self._sensor_task, self._transition_task):
+        for task in (self._sensor_task, self._transition_task, self._prune_task):
             if task:
                 task.cancel()
                 try:
@@ -219,6 +261,20 @@ class AppContext:
                     pass
         if self.current_tree:
             await self.current_tree.stop()
+        await self.journal.close()
+
+    async def _prune_loop(self) -> None:
+        while True:
+            await asyncio.sleep(JOURNAL_PRUNE_INTERVAL_SEC)
+            try:
+                deleted = await self.journal.prune(
+                    keep_transitions=JOURNAL_KEEP_TRANSITIONS,
+                    keep_ai_commands=JOURNAL_KEEP_AI,
+                )
+                if deleted["transitions"] or deleted["ai_commands"]:
+                    logger.info("journal pruned: %s", deleted)
+            except Exception:
+                logger.exception("journal prune failed")
 
     async def _sensor_loop(self) -> None:
         period = 1.0 / SENSOR_HZ
@@ -273,6 +329,13 @@ app.add_middleware(
 )
 
 
+def _session_key(request: Request) -> str:
+    sid = request.headers.get("x-session-id")
+    if sid:
+        return sid[:64]  # opaque; clamp length to prevent memory abuse
+    return request.client.host if request.client else "default"
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -280,22 +343,25 @@ async def health() -> dict:
         "state": ctx.state_machine.state.value,
         "clients": ctx.manager.count,
         "ai_enabled": ctx.ai.enabled,
-        "ai_history": ctx.ai.history_length,
+        "ai_history": ctx.ai.history_length(),
+        "ai_sessions": ctx.ai.session_count,
         "time": datetime.now(UTC).isoformat(),
     }
 
 
 @app.post("/ai-reset")
-async def ai_reset() -> dict:
-    ctx.ai.reset_history()
-    return {"ok": True, "ai_history": ctx.ai.history_length}
+async def ai_reset(request: Request) -> dict:
+    sid = request.headers.get("x-session-id")
+    ctx.ai.reset_history(sid[:64] if sid else None)
+    return {"ok": True, "ai_history": ctx.ai.history_length()}
 
 
 @app.get("/metrics")
 async def metrics() -> Response:
     body = ctx.metrics.render(
         ws_clients=ctx.manager.count,
-        ai_history=ctx.ai.history_length,
+        ai_history=ctx.ai.history_length(),
+        ai_sessions=ctx.ai.session_count,
     )
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
@@ -384,6 +450,7 @@ class AICommandResponse(BaseModel):
     explanation: str
     steps: list[AIPlanStepResult]
     fully_executed: bool
+    repaired: bool = False
 
 
 @app.post("/ai-command", response_model=AICommandResponse)
@@ -405,20 +472,33 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
+    session = _session_key(request)
     repaired = False
+    started = time.monotonic()
     try:
-        plan = await ctx.ai.translate(text, ctx.state_machine.status)
+        plan = await ctx.ai.translate(text, ctx.state_machine.status, session=session)
         ok, error = validate_plan(plan.steps, ctx.state_machine.state)
         if not ok and error:
             logger.info("plan invalid, repairing: %s", error)
             plan = await ctx.ai.translate(
-                text, ctx.state_machine.status, repair_context=error
+                text, ctx.state_machine.status, repair_context=error, session=session
             )
             repaired = True
             ctx.metrics.ai_repairs_total += 1
+            # Validate the repaired plan too; if still invalid, give up with
+            # an explicit 502 the UI can surface to the user.
+            ok2, error2 = validate_plan(plan.steps, ctx.state_machine.state)
+            if not ok2:
+                ctx.metrics.ai_errors_total += 1
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"AI could not produce a valid plan: {error2}",
+                )
     except AICommanderError as e:
         ctx.metrics.ai_errors_total += 1
         raise HTTPException(status_code=502, detail=str(e)) from e
+    finally:
+        ctx.metrics.observe_ai_latency_ms((time.monotonic() - started) * 1000.0)
 
     ctx.metrics.ai_commands_total += 1
     try:
@@ -459,6 +539,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
             for s in plan.steps
         ],
         fully_executed=False,
+        repaired=repaired,
     )
 
 

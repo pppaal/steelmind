@@ -94,6 +94,7 @@ export interface AICommandResponse {
   explanation: string;
   steps: AIPlanStep[];
   fully_executed: boolean;
+  repaired?: boolean;
 }
 
 export const STATE_COLORS: Record<RobotState, string> = {

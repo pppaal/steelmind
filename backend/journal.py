@@ -122,6 +122,38 @@ class Journal:
         n_t, n_ai = rows[0]
         return {"transitions": n_t, "ai_commands": n_ai}
 
+    async def prune(self, keep_transitions: int, keep_ai_commands: int) -> dict[str, int]:
+        """Keep only the most recent N rows per table. Returns rows deleted.
+
+        Cheap, idempotent, safe to call from a periodic background task; the
+        SQLite write lock is serialized via self._lock so it can't interleave
+        with appends from broadcasters."""
+        deleted = {"transitions": 0, "ai_commands": 0}
+        for table, keep in (
+            ("transitions", keep_transitions),
+            ("ai_commands", keep_ai_commands),
+        ):
+            res = await self._exec_returning(
+                f"DELETE FROM {table} WHERE id NOT IN "
+                f"(SELECT id FROM {table} ORDER BY id DESC LIMIT ?)",
+                (keep,),
+            )
+            deleted[table] = res
+        return deleted
+
+    async def _exec_returning(self, sql: str, params: tuple) -> int:
+        await self.init()
+        async with self._lock:
+            assert self._conn is not None
+            return await asyncio.to_thread(self._exec_returning_sync, self._conn, sql, params)
+
+    @staticmethod
+    def _exec_returning_sync(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+        cur = conn.execute(sql, params)
+        n = cur.rowcount
+        conn.commit()
+        return n
+
     async def _exec(self, sql: str, params: tuple) -> None:
         await self.init()
         async with self._lock:

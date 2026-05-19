@@ -6,6 +6,9 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       SENSOR_HZ: ${SENSOR_HZ:-20}
+      JOURNAL_DB: /data/steelmind.db
+    volumes:
+      - journal:/data
     ports:
       - "8000:8000"
     healthcheck:
@@ -25,3 +28,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  journal:

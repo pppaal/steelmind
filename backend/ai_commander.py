@@ -98,15 +98,31 @@ class AICommander:
         self.model = model
         behaviors_block = "\n".join(f"  - {n}: {d}" for n, d in BEHAVIOR_DESCRIPTIONS.items())
         self._system_prompt = SYSTEM_PROMPT.format(behaviors=behaviors_block)
-        # Rolling conversation memory: each turn is (user_text, assistant_tool_input).
-        # Bounded so the context never grows unboundedly.
-        self._history: deque[tuple[str, dict[str, Any]]] = deque(maxlen=MAX_HISTORY_TURNS)
+        # Per-session conversation memory. Each session key (e.g. a browser-
+        # generated UUID forwarded via X-Session-Id) gets its own bounded
+        # deque so concurrent users don't poison each other's intent.
+        self._history: dict[str, deque[tuple[str, dict[str, Any]]]] = {}
 
-    def reset_history(self) -> None:
-        self._history.clear()
+    def _bucket(self, session: str) -> deque[tuple[str, dict[str, Any]]]:
+        bucket = self._history.get(session)
+        if bucket is None:
+            bucket = deque(maxlen=MAX_HISTORY_TURNS)
+            self._history[session] = bucket
+        return bucket
+
+    def reset_history(self, session: str | None = None) -> None:
+        if session is None:
+            self._history.clear()
+        else:
+            self._history.pop(session, None)
+
+    def history_length(self, session: str | None = None) -> int:
+        if session is None:
+            return sum(len(b) for b in self._history.values())
+        return len(self._history.get(session, ()))
 
     @property
-    def history_length(self) -> int:
+    def session_count(self) -> int:
         return len(self._history)
 
     @property
@@ -114,13 +130,18 @@ class AICommander:
         return self._client is not None
 
     async def translate(
-        self, text: str, status: RobotStatus, repair_context: str | None = None
+        self,
+        text: str,
+        status: RobotStatus,
+        repair_context: str | None = None,
+        session: str = "default",
     ) -> AIPlanResult:
         if self._client is None:
             raise AICommanderError("ANTHROPIC_API_KEY is not configured")
 
+        bucket = self._bucket(session)
         messages: list[dict[str, Any]] = []
-        for prev_text, prev_plan in self._history:
+        for prev_text, prev_plan in bucket:
             messages.append({"role": "user", "content": f"이전 사용자 입력: {prev_text}"})
             messages.append(
                 {
@@ -179,7 +200,7 @@ class AICommander:
                 # Only commit successful first-pass plans to history; repair
                 # attempts are inputs, not turns the user actually said.
                 if repair_context is None:
-                    self._history.append((text, data))
+                    bucket.append((text, data))
                 return result
 
         raise AICommanderError("model did not produce a tool_use block")

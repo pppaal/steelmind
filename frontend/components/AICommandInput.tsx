@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { deriveApiBase } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 import type { AICommandResponse } from "@/lib/types";
 
 interface Bubble {
   id: number;
   text: string;
   steps: { command: string; behavior?: string }[];
+  repaired: boolean;
 }
 
 export default function AICommandInput() {
@@ -39,7 +41,10 @@ export default function AICommandInput() {
     try {
       const res = await fetch(`${apiBase.current}/ai-command`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": getSessionId(),
+        },
         body: JSON.stringify({ text: value }),
       });
       if (!res.ok) {
@@ -54,6 +59,7 @@ export default function AICommandInput() {
           command: s.command,
           behavior: typeof s.params?.behavior === "string" ? (s.params.behavior as string) : undefined,
         })),
+        repaired: Boolean(data.repaired),
       });
       setText("");
     } catch (e) {
@@ -89,7 +95,17 @@ export default function AICommandInput() {
               <span className="font-mono text-xs">{error}</span>
             ) : (
               <div className="space-y-1.5">
-                <div>{bubble?.text}</div>
+                <div className="flex items-start gap-2">
+                  <span className="flex-1">{bubble?.text}</span>
+                  {bubble?.repaired && (
+                    <span
+                      title="AI repaired its first plan after the validator rejected it"
+                      className="shrink-0 rounded bg-amber-900/60 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-amber-200"
+                    >
+                      self-corrected
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap items-center gap-1">
                   {bubble?.steps.map((s, i) => (
                     <span key={i} className="flex items-center gap-1">
@@ -127,7 +143,10 @@ export default function AICommandInput() {
           type="button"
           title="reset conversation memory"
           onClick={() => {
-            void fetch(`${apiBase.current}/ai-reset`, { method: "POST" }).catch(() => {});
+            void fetch(`${apiBase.current}/ai-reset`, {
+              method: "POST",
+              headers: { "X-Session-Id": getSessionId() },
+            }).catch(() => {});
           }}
           disabled={loading}
           className="rounded-md border border-zinc-700 px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
