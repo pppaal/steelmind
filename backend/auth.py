@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, WebSocket
 
 
 def _current_token() -> str:
@@ -28,3 +28,20 @@ def require_token(request: Request) -> None:
     token = header.split(" ", 1)[1].strip()
     if not secrets.compare_digest(token, token_expected):
         raise HTTPException(status_code=403, detail="invalid token")
+
+
+async def require_token_ws(ws: WebSocket) -> bool:
+    """WebSocket-side equivalent. Returns True if the connection is allowed;
+    otherwise closes the socket with 4401 (custom close code) and returns False.
+
+    Token is accepted via the `?token=...` query parameter — browsers can't
+    set Authorization headers on WS upgrade requests, so a query parameter is
+    the standard alternative."""
+    token_expected = _current_token()
+    if not token_expected:
+        return True
+    token = ws.query_params.get("token", "")
+    if not token or not secrets.compare_digest(token, token_expected):
+        await ws.close(code=4401, reason="invalid or missing token")
+        return False
+    return True

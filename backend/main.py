@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .ai_commander import AICommander, AICommanderError
-from .auth import auth_enabled, require_token
+from .auth import auth_enabled, require_token, require_token_ws
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .journal import Journal
@@ -57,6 +57,9 @@ JOURNAL_DB = os.getenv("JOURNAL_DB", "steelmind.db")
 JOURNAL_KEEP_TRANSITIONS = int(os.getenv("JOURNAL_KEEP_TRANSITIONS", "5000"))
 JOURNAL_KEEP_AI = int(os.getenv("JOURNAL_KEEP_AI", "1000"))
 JOURNAL_PRUNE_INTERVAL_SEC = float(os.getenv("JOURNAL_PRUNE_INTERVAL_SEC", "60"))
+# Comma-separated list of allowed origins. Default "*" — wildcard origin
+# without credentials, which is spec-valid and what a public demo wants.
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 
 class ConnectionManager:
@@ -66,6 +69,11 @@ class ConnectionManager:
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
+        await self.attach(ws)
+
+    async def attach(self, ws: WebSocket) -> None:
+        """Register an already-accepted socket. Used by the auth-gated /ws
+        endpoint where accept() must run before the token check."""
         async with self._lock:
             self._clients.add(ws)
 
@@ -80,10 +88,16 @@ class ConnectionManager:
             message = json.dumps(payload, default=str)
         async with self._lock:
             targets = list(self._clients)
-        for ws in targets:
-            try:
-                await ws.send_text(message)
-            except Exception:
+        if not targets:
+            return
+        # Fan out in parallel so one slow client doesn't delay the broadcast
+        # cadence for everyone else. Failures are collected and the dead
+        # sockets removed after the send wave completes.
+        results = await asyncio.gather(
+            *(ws.send_text(message) for ws in targets), return_exceptions=True
+        )
+        for ws, result in zip(targets, results, strict=True):
+            if isinstance(result, BaseException):
                 await self.disconnect(ws)
 
     @property
@@ -251,6 +265,7 @@ class AppContext:
         self.metrics = Metrics()
         self.background_tasks: set[asyncio.Task[None]] = set()
         self.current_tree: BehaviorTree | None = None
+        self.behavior_lock = asyncio.Lock()
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
         self._prune_task: asyncio.Task[None] | None = None
@@ -332,8 +347,10 @@ app = FastAPI(title="steelmind backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    # Wildcard origin + credentials is invalid per CORS spec — browsers reject
+    # it. Enable credentials only when a concrete origin list is configured.
+    allow_credentials=CORS_ORIGINS != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -377,12 +394,15 @@ async def metrics() -> Response:
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
 
-@app.get("/journal/transitions")
+# Journal endpoints carry user-supplied text (AI prompts) and full transition
+# history. /counts is just integers so it's safe to leave open for monitoring;
+# the row-level endpoints require auth when API_TOKEN is set.
+@app.get("/journal/transitions", dependencies=[Depends(require_token)])
 async def journal_transitions(limit: int = 100) -> dict:
     return {"transitions": await ctx.journal.list_transitions(limit=min(limit, 1000))}
 
 
-@app.get("/journal/ai-commands")
+@app.get("/journal/ai-commands", dependencies=[Depends(require_token)])
 async def journal_ai_commands(limit: int = 100) -> dict:
     return {"ai_commands": await ctx.journal.list_ai_commands(limit=min(limit, 1000))}
 
@@ -397,8 +417,12 @@ async def status() -> dict:
     return ctx.state_machine.status.model_dump()
 
 
-@app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_token)])
-async def command(req: CommandRequest) -> CommandResponse:
+async def _dispatch_command(req: CommandRequest) -> CommandResponse:
+    """Pure command dispatcher — no FastAPI dependencies, no auth. Called by
+    both the HTTP route handler and the in-process plan executor / WS handler.
+    Raises HTTPException for invalid transitions / unknown commands so HTTP
+    callers can let FastAPI render the error and in-process callers can catch
+    a single exception type."""
     cmd = req.command.lower()
     try:
         if cmd == "stand":
@@ -421,19 +445,28 @@ async def command(req: CommandRequest) -> CommandResponse:
     return CommandResponse(ok=True, message=f"{cmd} accepted", status=ctx.state_machine.status)
 
 
+@app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_token)])
+async def command(req: CommandRequest) -> CommandResponse:
+    return await _dispatch_command(req)
+
+
 async def _run_behavior(name: str) -> None:
-    if ctx.current_tree and ctx.current_tree.is_running:
-        await ctx.current_tree.stop()
-        # Cancelled BT may have set behavior name but skipped the exit action.
-        if ctx.state_machine.status.current_behavior is not None:
-            ctx.state_machine.set_behavior(None)
-        if ctx.state_machine.state == RobotState.EXECUTING:
-            await ctx.state_machine.transition(
-                RobotState.STANDING, reason="behavior:cancelled", force=True
-            )
-    tree = BEHAVIORS[name](ctx.state_machine)
-    ctx.current_tree = tree
-    tree.start()
+    # Serialize behavior swaps so a concurrent caller can't observe an
+    # intermediate state where current_tree points at a stopped tree or
+    # current_behavior is half-cleared.
+    async with ctx.behavior_lock:
+        if ctx.current_tree and ctx.current_tree.is_running:
+            await ctx.current_tree.stop()
+            # Cancelled BT may have set behavior name but skipped the exit action.
+            if ctx.state_machine.status.current_behavior is not None:
+                ctx.state_machine.set_behavior(None)
+            if ctx.state_machine.state == RobotState.EXECUTING:
+                await ctx.state_machine.transition(
+                    RobotState.STANDING, reason="behavior:cancelled", force=True
+                )
+        tree = BEHAVIORS[name](ctx.state_machine)
+        ctx.current_tree = tree
+        tree.start()
 
 
 @app.get("/behaviors")
@@ -565,7 +598,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
 async def _execute_plan(steps: list) -> None:
     for step in steps:
         try:
-            await command(CommandRequest(command=step.command, params=step.params))
+            await _dispatch_command(CommandRequest(command=step.command, params=step.params))
         except HTTPException as e:
             await ctx.manager.broadcast(
                 {"type": "plan_step_failed", "command": step.command, "detail": str(e.detail)}
@@ -583,7 +616,13 @@ async def _execute_plan(steps: list) -> None:
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
-    await ctx.manager.connect(ws)
+    # Accept the upgrade first so we can send a structured close on auth fail.
+    await ws.accept()
+    if not await require_token_ws(ws):
+        return
+    # require_token_ws didn't close → connection is authorized. Register
+    # without re-accepting.
+    await ctx.manager.attach(ws)
     try:
         await ws.send_text(StatusEvent(status=ctx.state_machine.status).model_dump_json())
         while True:
@@ -607,7 +646,7 @@ async def _handle_ws_message(ws: WebSocket, msg: dict) -> None:
     elif kind == "command":
         try:
             req = CommandRequest(**msg.get("payload", {}))
-            resp = await command(req)
+            resp = await _dispatch_command(req)
             await ws.send_text(resp.model_dump_json())
         except HTTPException as e:
             await ws.send_text(json.dumps({"type": "error", "detail": e.detail}))
