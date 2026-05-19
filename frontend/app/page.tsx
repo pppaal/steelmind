@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import AICommandInput from "@/components/AICommandInput";
 import CommandBar from "@/components/CommandBar";
 import TelemetryPanel from "@/components/TelemetryPanel";
 import { useRobotSocket } from "@/lib/useRobotSocket";
@@ -37,6 +38,10 @@ export default function Page() {
           sensor={sensor}
           lastReason={lastReason}
         />
+      </div>
+
+      <div className="flex justify-center border-t border-zinc-800 bg-zinc-950/80 px-4 py-3">
+        <AICommandInput />
       </div>
 
       <CommandBar state={state} disabled={connection !== "open"} onCommand={sendCommand} />

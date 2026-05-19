@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .ai_commander import AICommander, AICommanderError
 from .behavior_tree import Action, BehaviorTree, NodeStatus, Sequence
 from .models import (
     CommandRequest,
@@ -104,6 +105,7 @@ class AppContext:
     def __init__(self) -> None:
         self.state_machine = StateMachine()
         self.manager = ConnectionManager()
+        self.ai = AICommander(api_key=ANTHROPIC_API_KEY)
         self.current_tree: BehaviorTree | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
@@ -234,6 +236,59 @@ async def _run_demo_behavior(name: str) -> None:
     )
     ctx.current_tree = tree
     tree.start()
+
+
+class AICommandRequest(BaseModel):
+    text: str
+
+
+class AICommandResponse(BaseModel):
+    command: str
+    params: dict = {}
+    explanation: str
+    executed: bool
+    detail: str | None = None
+
+
+@app.post("/ai-command", response_model=AICommandResponse)
+async def ai_command(req: AICommandRequest) -> AICommandResponse:
+    if not ctx.ai.enabled:
+        raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    try:
+        result = await ctx.ai.translate(text, ctx.state_machine.status)
+    except AICommanderError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    await ctx.manager.broadcast(
+        {
+            "type": "ai_command",
+            "input": text,
+            "command": result.command,
+            "params": result.params,
+            "explanation": result.explanation,
+        }
+    )
+
+    try:
+        await command(CommandRequest(command=result.command, params=result.params))
+        executed = True
+        detail = None
+    except HTTPException as e:
+        executed = False
+        detail = str(e.detail)
+
+    return AICommandResponse(
+        command=result.command,
+        params=result.params,
+        explanation=result.explanation,
+        executed=executed,
+        detail=detail,
+    )
 
 
 @app.websocket("/ws")

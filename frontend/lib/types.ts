@@ -50,14 +50,31 @@ export interface BehaviorEvent {
   detail: string | null;
 }
 
+export interface AICommandEvent {
+  type: "ai_command";
+  input: string;
+  command: string;
+  params: Record<string, unknown>;
+  explanation: string;
+}
+
 export type ServerEvent =
   | StateTransitionEvent
   | SensorEvent
   | StatusEvent
   | BehaviorEvent
+  | AICommandEvent
   | { type: "pong" }
   | { type: "error"; detail: string }
   | { ok: boolean; message?: string; status: RobotStatus };
+
+export interface AICommandResponse {
+  command: string;
+  params: Record<string, unknown>;
+  explanation: string;
+  executed: boolean;
+  detail: string | null;
+}
 
 export const STATE_COLORS: Record<RobotState, string> = {
   IDLE: "#3b82f6",
