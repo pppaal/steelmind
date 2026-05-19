@@ -95,14 +95,22 @@ class BehaviorTree:
         self.last_status: NodeStatus | None = None
 
     async def _run(self) -> None:
-        while not self._stop.is_set():
-            self.last_status = await self.root.tick()
-            if self.last_status != NodeStatus.RUNNING:
-                break
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.tick_period)
-            except TimeoutError:
-                continue
+        try:
+            while not self._stop.is_set():
+                self.last_status = await self.root.tick()
+                if self.last_status != NodeStatus.RUNNING:
+                    break
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=self.tick_period)
+                except TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            # External stop() cancelled the in-flight tick. Treat as cleanly
+            # interrupted; let the surrounding orchestrator do post-cancel
+            # state cleanup. Do not re-raise — _run is the task body itself
+            # and re-raising would mark the task as cancelled even when the
+            # caller is awaiting it after stop().
+            self.last_status = NodeStatus.FAILURE
 
     def start(self) -> asyncio.Task[None]:
         if self._task and not self._task.done():
@@ -112,8 +120,13 @@ class BehaviorTree:
         return self._task
 
     async def stop(self) -> None:
+        # Setting the event alone only signals between ticks; if the current
+        # tick is blocked inside an Action (e.g. asyncio.sleep in a wait
+        # node), it won't observe _stop until the action returns naturally.
+        # Cancel the task so the in-flight await is interrupted right now.
         self._stop.set()
         if self._task:
+            self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
