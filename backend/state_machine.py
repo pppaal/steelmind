@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import RobotState, RobotStatus, StateTransitionEvent
 
@@ -58,7 +58,7 @@ class StateMachine:
                 state=target,
                 previous_state=current,
                 current_behavior=self._status.current_behavior,
-                last_transition=datetime.now(timezone.utc),
+                last_transition=datetime.now(UTC),
             )
             event = StateTransitionEvent(from_state=current, to_state=target, reason=reason)
 

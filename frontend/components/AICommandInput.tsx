@@ -125,6 +125,17 @@ export default function AICommandInput() {
         />
         <button
           type="button"
+          title="reset conversation memory"
+          onClick={() => {
+            void fetch(`${apiBase.current}/ai-reset`, { method: "POST" }).catch(() => {});
+          }}
+          disabled={loading}
+          className="rounded-md border border-zinc-700 px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
+        >
+          reset
+        </button>
+        <button
+          type="button"
           onClick={() => void submit()}
           disabled={loading || !text.trim()}
           className="flex items-center gap-2 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"

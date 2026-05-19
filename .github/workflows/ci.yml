@@ -15,7 +15,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - run: pytest -q
+      - name: ruff check
+        run: ruff check .
+      - name: pytest
+        run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -31,7 +34,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: npx next build
+      - run: npm test
+      - name: build
+        run: npx next build
         env:
           NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
 

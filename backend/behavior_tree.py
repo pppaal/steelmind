@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from enum import Enum
-from typing import Awaitable, Callable
 
 
 class NodeStatus(str, Enum):
@@ -101,7 +101,7 @@ class BehaviorTree:
                 break
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.tick_period)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     def start(self) -> asyncio.Task[None]:

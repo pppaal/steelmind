@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
@@ -21,7 +21,7 @@ class Vector3(BaseModel):
 
 
 class SensorData(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     imu_orientation: Vector3 = Field(default_factory=Vector3)
     imu_angular_velocity: Vector3 = Field(default_factory=Vector3)
     imu_linear_acceleration: Vector3 = Field(default_factory=Vector3)
@@ -35,7 +35,7 @@ class RobotStatus(BaseModel):
     state: RobotState = RobotState.IDLE
     previous_state: RobotState | None = None
     current_behavior: str | None = None
-    last_transition: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_transition: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error: str | None = None
 
 
@@ -43,7 +43,7 @@ class StateTransitionEvent(BaseModel):
     type: Literal["state_transition"] = "state_transition"
     from_state: RobotState
     to_state: RobotState
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     reason: str | None = None
 
 

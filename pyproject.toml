@@ -2,3 +2,30 @@
 asyncio_mode = "auto"
 testpaths = ["backend/tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "frontend"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",   # line-length handled by formatter
+    "B008",   # FastAPI Depends in defaults is idiomatic
+    "RUF002", # ambiguous Korean characters in docstrings are intentional
+    "RUF003",
+    "UP042",  # str+Enum mixin is still idiomatic in Pydantic v2
+    "SIM105", # contextlib.suppress is not always clearer than try/except/pass
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["E402"]

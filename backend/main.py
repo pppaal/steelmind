@@ -6,13 +6,13 @@ import logging
 import math
 import os
 import random
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -25,10 +25,10 @@ from .models import (
     RobotState,
     SensorData,
     SensorEvent,
-    StateTransitionEvent,
     StatusEvent,
     Vector3,
 )
+from .rate_limit import TokenBucket
 from .state_machine import InvalidTransitionError, StateMachine
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -38,6 +38,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 SENSOR_HZ = float(os.getenv("SENSOR_HZ", "20"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+AI_RATE_PER_SEC = float(os.getenv("AI_RATE_PER_SEC", "0.5"))  # 1 call / 2s sustained
+AI_RATE_BURST = float(os.getenv("AI_RATE_BURST", "3"))
 
 
 class ConnectionManager:
@@ -149,6 +151,8 @@ class AppContext:
         self.state_machine = StateMachine()
         self.manager = ConnectionManager()
         self.ai = AICommander(api_key=ANTHROPIC_API_KEY)
+        self.ai_rate = TokenBucket(rate_per_sec=AI_RATE_PER_SEC, burst=AI_RATE_BURST)
+        self.background_tasks: set[asyncio.Task[None]] = set()
         self.current_tree: BehaviorTree | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
@@ -219,8 +223,16 @@ async def health() -> dict:
         "ok": True,
         "state": ctx.state_machine.state.value,
         "clients": ctx.manager.count,
-        "time": datetime.now(timezone.utc).isoformat(),
+        "ai_enabled": ctx.ai.enabled,
+        "ai_history": ctx.ai.history_length,
+        "time": datetime.now(UTC).isoformat(),
     }
+
+
+@app.post("/ai-reset")
+async def ai_reset() -> dict:
+    ctx.ai.reset_history()
+    return {"ok": True, "ai_history": ctx.ai.history_length}
 
 
 @app.get("/status")
@@ -248,7 +260,7 @@ async def command(req: CommandRequest) -> CommandResponse:
         else:
             raise HTTPException(status_code=400, detail=f"unknown command: {req.command}")
     except InvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return CommandResponse(ok=True, message=f"{cmd} accepted", status=ctx.state_machine.status)
 
 
@@ -272,7 +284,7 @@ async def list_behaviors() -> dict:
     return {
         "behaviors": [
             {"name": name, "description": BEHAVIOR_DESCRIPTIONS.get(name, "")}
-            for name in BEHAVIORS.keys()
+            for name in BEHAVIORS
         ]
     }
 
@@ -295,9 +307,18 @@ class AICommandResponse(BaseModel):
 
 
 @app.post("/ai-command", response_model=AICommandResponse)
-async def ai_command(req: AICommandRequest) -> AICommandResponse:
+async def ai_command(req: AICommandRequest, request: Request) -> AICommandResponse:
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+
+    client_key = request.client.host if request.client else "unknown"
+    allowed, retry_after = await ctx.ai_rate.allow(client_key)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"rate limited; retry in {retry_after:.1f}s",
+            headers={"Retry-After": f"{retry_after:.1f}"},
+        )
 
     text = (req.text or "").strip()
     if not text:
@@ -306,7 +327,7 @@ async def ai_command(req: AICommandRequest) -> AICommandResponse:
     try:
         plan = await ctx.ai.translate(text, ctx.state_machine.status)
     except AICommanderError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     await ctx.manager.broadcast(
         {
@@ -321,8 +342,11 @@ async def ai_command(req: AICommandRequest) -> AICommandResponse:
 
     # Schedule the plan to run in the background so the HTTP call returns
     # immediately. Each step waits for behavior completion (when applicable)
-    # before the next is dispatched.
-    asyncio.create_task(_execute_plan(plan.steps))
+    # before the next is dispatched. Hold a reference so the task isn't
+    # garbage-collected mid-flight.
+    task = asyncio.create_task(_execute_plan(plan.steps))
+    ctx.background_tasks.add(task)
+    task.add_done_callback(ctx.background_tasks.discard)
 
     # Optimistically return the plan; clients track real execution via /ws.
     return AICommandResponse(

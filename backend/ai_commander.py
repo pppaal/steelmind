@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from .behaviors import BEHAVIOR_DESCRIPTIONS
 from .models import RobotStatus
+
+MAX_HISTORY_TURNS = 4
 
 logger = logging.getLogger("steelmind.ai")
 
@@ -95,6 +98,16 @@ class AICommander:
         self.model = model
         behaviors_block = "\n".join(f"  - {n}: {d}" for n, d in BEHAVIOR_DESCRIPTIONS.items())
         self._system_prompt = SYSTEM_PROMPT.format(behaviors=behaviors_block)
+        # Rolling conversation memory: each turn is (user_text, assistant_tool_input).
+        # Bounded so the context never grows unboundedly.
+        self._history: deque[tuple[str, dict[str, Any]]] = deque(maxlen=MAX_HISTORY_TURNS)
+
+    def reset_history(self) -> None:
+        self._history.clear()
+
+    @property
+    def history_length(self) -> int:
+        return len(self._history)
 
     @property
     def enabled(self) -> bool:
@@ -104,12 +117,27 @@ class AICommander:
         if self._client is None:
             raise AICommanderError("ANTHROPIC_API_KEY is not configured")
 
+        messages: list[dict[str, Any]] = []
+        for prev_text, prev_plan in self._history:
+            messages.append({"role": "user", "content": f"이전 사용자 입력: {prev_text}"})
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"이전 계획: "
+                        f"steps={[s.get('command') for s in prev_plan.get('steps', [])]}, "
+                        f"explanation={prev_plan.get('explanation')!r}"
+                    ),
+                }
+            )
+
         user_content = (
             f"현재 로봇 상태: {status.state.value}\n"
             f"이전 상태: {status.previous_state.value if status.previous_state else 'none'}\n"
             f"현재 behavior: {status.current_behavior or 'none'}\n"
             f"\n사용자 입력: {text}"
         )
+        messages.append({"role": "user", "content": user_content})
 
         try:
             response = await self._client.messages.create(
@@ -124,7 +152,7 @@ class AICommander:
                 ],
                 tools=[TOOL],
                 tool_choice={"type": "tool", "name": TOOL["name"]},
-                messages=[{"role": "user", "content": user_content}],
+                messages=messages,
             )
         except APIError as e:
             logger.exception("Anthropic API error")
@@ -134,8 +162,10 @@ class AICommander:
             if block.type == "tool_use" and block.name == TOOL["name"]:
                 data = block.input or {}
                 try:
-                    return AIPlanResult(**data)
+                    result = AIPlanResult(**data)
                 except Exception as e:
                     raise AICommanderError(f"invalid tool input: {data!r}") from e
+                self._history.append((text, data))
+                return result
 
         raise AICommanderError("model did not produce a tool_use block")

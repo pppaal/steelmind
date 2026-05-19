@@ -63,3 +63,15 @@ def test_ai_command_disabled_without_key(client: TestClient) -> None:
     # Test runs without ANTHROPIC_API_KEY so AICommander is disabled.
     r = client.post("/ai-command", json={"text": "stand up"})
     assert r.status_code == 503
+
+
+def test_ai_reset_endpoint(client: TestClient) -> None:
+    r = client.post("/ai-reset")
+    assert r.status_code == 200
+    assert r.json()["ai_history"] == 0
+
+
+def test_health_exposes_ai_fields(client: TestClient) -> None:
+    body = client.get("/health").json()
+    assert "ai_enabled" in body
+    assert "ai_history" in body
