@@ -311,6 +311,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Forward Kinematics
+         * @description End-effector (x, y) of the configured planar chain at the current
+         *     joint angles. 400 if this robot config has no chain.
+         */
+        get: operations["forward_kinematics_fk_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reach
+         * @description Solve IK for a target (x, y) and move the chain there as a smooth
+         *     min-jerk trajectory. Returns the solved angles and whether the target
+         *     was reachable (if not, the arm goes to the closest reachable pose).
+         */
+        post: operations["reach_reach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ai-command": {
         parameters: {
             query?: never;
@@ -406,6 +449,15 @@ export interface components {
             names: string[];
             /** Segment Duration */
             segment_duration?: number | null;
+        };
+        /** ReachRequest */
+        ReachRequest: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** Duration */
+            duration?: number | null;
         };
         /**
          * RobotState
@@ -914,6 +966,63 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forward_kinematics_fk_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    reach_reach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReachRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

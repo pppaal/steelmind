@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 
 from .hardware.base import JointSpec
+from .kinematics import PlanarChain, chain_from_config
 
 
 def _maybe_yaml_load(text: str) -> dict:
@@ -21,6 +22,19 @@ def _maybe_yaml_load(text: str) -> dict:
             "YAML config requires PyYAML — install it or use a .json config"
         ) from e
     return yaml.safe_load(text)
+
+
+def _read_config(path: str | Path) -> dict:
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    if p.suffix.lower() in (".yaml", ".yml"):
+        return _maybe_yaml_load(text)
+    return json.loads(text)
+
+
+def load_chain(path: str | Path) -> PlanarChain | None:
+    """Return the optional planar kinematic chain from a config, or None."""
+    return chain_from_config(_read_config(path))
 
 
 def load_config(path: str | Path) -> list[JointSpec]:

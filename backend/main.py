@@ -40,6 +40,7 @@ from .hardware.base import JointSpec
 from .journal import Journal
 from .journal_base import JournalBase
 from .keyframes import KeyframeStore
+from .kinematics import PlanarChain
 from .logging_setup import configure as configure_logging
 from .middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from .models import (
@@ -53,12 +54,12 @@ from .models import (
 )
 from .plan_validator import validate_plan
 from .rate_limit import TokenBucket
-from .robot_config import load_config
+from .robot_config import load_chain, load_config
 from .safety import Watchdog
 from .secrets import env_or_file
 from .state_machine import InvalidTransitionError, StateMachine
 from .tracing import configure as configure_tracing
-from .trajectory import Trajectory
+from .trajectory import Trajectory, min_jerk
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -294,6 +295,7 @@ class AppContext:
         # instead of breaking module import.
         self.hardware: RobotHardware | None = None
         self.joints: list[JointSpec] = []
+        self.chain: PlanarChain | None = None
         self.calibration = Calibration(CALIBRATION_FILE)
         self.keyframes = KeyframeStore(KEYFRAMES_FILE)
         self.current_behavior_task: asyncio.Task[None] | None = None
@@ -309,6 +311,7 @@ class AppContext:
         await self.calibration.load()
         await self.keyframes.load()
         self.joints = _apply_calibration(load_config(ROBOT_CONFIG), self.calibration)
+        self.chain = load_chain(ROBOT_CONFIG)
         self.hardware = build_hardware(self.joints)
         await self.hardware.init()
         # The watchdog fires HAL.estop() if the sensor loop stops feeding
@@ -796,6 +799,53 @@ async def delete_keyframe(name: str) -> dict:
     if not await ctx.keyframes.delete(name):
         raise HTTPException(status_code=404, detail=f"unknown keyframe: {name}")
     return {"ok": True, "name": name}
+
+
+@app.get("/fk", dependencies=[Depends(require_viewer)])
+async def forward_kinematics() -> dict:
+    """End-effector (x, y) of the configured planar chain at the current
+    joint angles. 400 if this robot config has no chain."""
+    if ctx.chain is None:
+        raise HTTPException(status_code=400, detail="no kinematic chain configured")
+    if ctx.hardware is None:
+        raise HTTPException(status_code=503, detail="hardware not ready")
+    snapshot = await ctx.hardware.read()
+    angles = {n: js.position for n, js in snapshot.joints.items()}
+    x, y = ctx.chain.forward(angles)
+    return {"x": x, "y": y, "reach": ctx.chain.reach}
+
+
+class ReachRequest(BaseModel):
+    x: float
+    y: float
+    duration: float | None = None
+
+
+@app.post("/reach", dependencies=[Depends(require_operator)])
+async def reach(req: ReachRequest) -> dict:
+    """Solve IK for a target (x, y) and move the chain there as a smooth
+    min-jerk trajectory. Returns the solved angles and whether the target
+    was reachable (if not, the arm goes to the closest reachable pose)."""
+    if ctx.chain is None:
+        raise HTTPException(status_code=400, detail="no kinematic chain configured")
+    if ctx.hardware is None:
+        raise HTTPException(status_code=503, detail="hardware not ready")
+
+    snapshot = await ctx.hardware.read()
+    seed = {n: js.position for n, js in snapshot.joints.items()}
+    limits = {j.name: (j.lower_limit, j.upper_limit) for j in ctx.joints}
+    angles, reached, residual = ctx.chain.inverse((req.x, req.y), seed=seed, limits=limits)
+
+    # Build a min-jerk move from the current pose into the IK solution.
+    seg = req.duration or KEYFRAME_SEGMENT_SEC
+    traj = min_jerk(seed, {**seed, **angles}, duration=seg)
+    await _play(f"reach:({req.x:.2f},{req.y:.2f})", traj)
+    return {
+        "ok": True,
+        "reached": reached,
+        "residual": residual,
+        "angles": angles,
+    }
 
 
 class AICommandRequest(BaseModel):

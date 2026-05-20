@@ -20,6 +20,10 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [estopped, setEstopped] = useState(false);
+  // Kinematics: hasChain is discovered by probing /fk (400 when no chain).
+  const [hasChain, setHasChain] = useState(false);
+  const [reachTarget, setReachTarget] = useState({ x: "0.15", y: "0.10" });
+  const [fk, setFk] = useState<{ x: number; y: number } | null>(null);
 
   const post = useCallback(
     async (path: string, body?: unknown, method = "POST") => {
@@ -49,9 +53,25 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
     }
   }, [apiBase]);
 
+  const refreshFk = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/fk`, { headers: authHeaders() });
+      const d = res.ok ? await res.json() : null;
+      if (d && typeof d.x === "number" && typeof d.y === "number") {
+        setHasChain(true);
+        setFk({ x: d.x, y: d.y });
+      } else {
+        setHasChain(false);
+      }
+    } catch {
+      setHasChain(false);
+    }
+  }, [apiBase]);
+
   useEffect(() => {
     void refreshKeyframes();
-  }, [refreshKeyframes]);
+    void refreshFk();
+  }, [refreshKeyframes, refreshFk]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -96,6 +116,16 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
 
   const playKeyframes = () =>
     run(() => post("/keyframes/play", { names: keyframes }));
+
+  const doReach = () =>
+    run(async () => {
+      const x = parseFloat(reachTarget.x);
+      const y = parseFloat(reachTarget.y);
+      if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("x/y must be numbers");
+      const res = (await post("/reach", { x, y })) as { reached: boolean };
+      if (!res.reached) setError("target out of reach — moved to closest pose");
+      setTimeout(() => void refreshFk(), 600);
+    });
 
   return (
     <div className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l border-zinc-800 bg-zinc-950/80 p-4">
@@ -160,6 +190,43 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
           )}
         </div>
       </div>
+
+      {/* Reach (IK) — only when the robot config defines a kinematic chain */}
+      {hasChain && (
+        <div className="space-y-1.5">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+            Reach (IK)
+          </div>
+          <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
+            {fk && (
+              <div className="font-mono text-[10px] text-zinc-500">
+                tip: ({fk.x.toFixed(3)}, {fk.y.toFixed(3)}) m
+              </div>
+            )}
+            <div className="flex items-center gap-1">
+              <label className="font-mono text-[10px] text-zinc-500">x</label>
+              <input
+                value={reachTarget.x}
+                onChange={(e) => setReachTarget((t) => ({ ...t, x: e.target.value }))}
+                className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-sky-500"
+              />
+              <label className="font-mono text-[10px] text-zinc-500">y</label>
+              <input
+                value={reachTarget.y}
+                onChange={(e) => setReachTarget((t) => ({ ...t, y: e.target.value }))}
+                className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-sky-500"
+              />
+              <button
+                onClick={doReach}
+                disabled={busy || estopped}
+                className="ml-auto rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+              >
+                Reach
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Teach & repeat */}
       <div className="space-y-1.5">

@@ -70,4 +70,23 @@ describe("HardwarePanel", () => {
       expect(hit.some((u) => u.endsWith("/keyframes/home"))).toBe(true),
     );
   });
+
+  it("shows the Reach panel only when /fk returns a position, and sends x/y", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url, init) => {
+        if (init?.body) calls.push({ url, body: JSON.parse(init.body as string) });
+        if (url.endsWith("/fk")) return { x: 0.2, y: 0.1, reach: 0.32 };
+        if (url.endsWith("/reach")) return { reached: true, angles: {} };
+        return { keyframes: {} };
+      }),
+    );
+    render(<HardwarePanel apiBase="http://x" jointNames={["shoulder_lift"]} />);
+    const btn = await screen.findByRole("button", { name: "Reach" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/reach"))).toBe(true));
+    const reach = calls.find((c) => c.url.endsWith("/reach"))!;
+    expect(reach.body).toMatchObject({ x: 0.15, y: 0.1 });
+  });
 });
