@@ -39,6 +39,7 @@ from .hardware import RobotHardware, build_hardware
 from .hardware.base import JointSpec
 from .journal import Journal
 from .journal_base import JournalBase
+from .keyframes import KeyframeStore
 from .logging_setup import configure as configure_logging
 from .middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from .models import (
@@ -57,6 +58,7 @@ from .safety import Watchdog
 from .secrets import env_or_file
 from .state_machine import InvalidTransitionError, StateMachine
 from .tracing import configure as configure_tracing
+from .trajectory import Trajectory
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -84,6 +86,8 @@ AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "20"))
 ROBOT_CONFIG = os.getenv("ROBOT_CONFIG", "backend/configs/sim_humanoid.json")
 HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
+KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
+KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))
 # Largest single jog step a /jog call may request, radians. Keeps a fat-
 # fingered operator from commanding a 180° slam in one click.
 MAX_JOG_RAD = float(os.getenv("MAX_JOG_RAD", "0.35"))  # ~20 degrees
@@ -291,6 +295,7 @@ class AppContext:
         self.hardware: RobotHardware | None = None
         self.joints: list[JointSpec] = []
         self.calibration = Calibration(CALIBRATION_FILE)
+        self.keyframes = KeyframeStore(KEYFRAMES_FILE)
         self.current_behavior_task: asyncio.Task[None] | None = None
         self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
@@ -302,6 +307,7 @@ class AppContext:
         self.journal = _build_journal()
         await self.journal.init()
         await self.calibration.load()
+        await self.keyframes.load()
         self.joints = _apply_calibration(load_config(ROBOT_CONFIG), self.calibration)
         self.hardware = build_hardware(self.joints)
         await self.hardware.init()
@@ -671,46 +677,43 @@ async def command(req: CommandRequest) -> CommandResponse:
     return await _dispatch_command(req)
 
 
-async def _play_trajectory(behavior_name: str) -> None:
-    """Background task: sample the behavior's trajectory at SENSOR_HZ and
-    push each waypoint through the HAL. Returns the state machine to
-    STANDING on normal completion. Cancellable — _run_behavior cancels the
-    in-flight task when a new behavior preempts."""
+async def _play_trajectory(label: str, traj: Trajectory) -> None:
+    """Background task: sample `traj` at SENSOR_HZ and push each waypoint
+    through the HAL. Returns the state machine to STANDING on completion.
+    Cancellable — _play() cancels the in-flight task when a new motion
+    preempts. `label` is the behavior/keyframe name reported as
+    current_behavior."""
     assert ctx.hardware is not None
-    behavior = BEHAVIORS[behavior_name]
-    traj = behavior.build()
     period = 1.0 / SENSOR_HZ
     started = time.monotonic()
     try:
         await ctx.state_machine.transition(
-            RobotState.EXECUTING, reason=f"behavior:{behavior_name}", force=True
+            RobotState.EXECUTING, reason=f"play:{label}", force=True
         )
-        ctx.state_machine.set_behavior(behavior_name)
+        ctx.state_machine.set_behavior(label)
         while True:
             t = time.monotonic() - started
-            targets = traj.sample(t)
-            await ctx.hardware.write(targets)
+            await ctx.hardware.write(traj.sample(t))
             if t >= traj.duration:
                 break
             await asyncio.sleep(period)
     except asyncio.CancelledError:
-        # Preempted by a newer behavior. Caller handles state cleanup.
         raise
     finally:
         ctx.state_machine.set_behavior(None)
         if ctx.state_machine.state == RobotState.EXECUTING:
             try:
                 await ctx.state_machine.transition(
-                    RobotState.STANDING, reason=f"behavior:{behavior_name}:done", force=True
+                    RobotState.STANDING, reason=f"play:{label}:done", force=True
                 )
             except Exception:
-                logger.exception("post-behavior transition failed")
+                logger.exception("post-play transition failed")
 
 
-async def _run_behavior(name: str) -> None:
-    """Replace any running behavior with a fresh one. The HTTP route awaits
-    the EXECUTING transition before returning so the response carries the
-    real new state, but the trajectory itself plays in the background."""
+async def _play(label: str, traj: Trajectory) -> None:
+    """Preempt any running motion and start a new trajectory in the
+    background. Awaits the EXECUTING transition before returning so HTTP
+    responses carry the real new state."""
     async with ctx.behavior_lock:
         prev = ctx.current_behavior_task
         if prev and not prev.done():
@@ -720,19 +723,21 @@ async def _run_behavior(name: str) -> None:
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.exception("previous behavior task raised on cancel")
+                logger.exception("previous play task raised on cancel")
         if ctx.hardware:
             await ctx.hardware.enable()
-        task = asyncio.create_task(_play_trajectory(name))
-        ctx.current_behavior_task = task
-        # Wait briefly for the player to commit the EXECUTING transition.
+        ctx.current_behavior_task = asyncio.create_task(_play_trajectory(label, traj))
         for _ in range(50):
             if (
                 ctx.state_machine.state == RobotState.EXECUTING
-                and ctx.state_machine.status.current_behavior == name
+                and ctx.state_machine.status.current_behavior == label
             ):
                 break
             await asyncio.sleep(0.01)
+
+
+async def _run_behavior(name: str) -> None:
+    await _play(name, BEHAVIORS[name].build())
 
 
 @app.get("/behaviors")
@@ -743,6 +748,54 @@ async def list_behaviors() -> dict:
             for name in BEHAVIORS
         ]
     }
+
+
+@app.get("/keyframes", dependencies=[Depends(require_viewer)])
+async def list_keyframes() -> dict:
+    return {"keyframes": ctx.keyframes.all()}
+
+
+class KeyframePlayRequest(BaseModel):
+    names: list[str]
+    segment_duration: float | None = None
+
+
+# NOTE: this literal route MUST be declared before /keyframes/{name} or the
+# parameterized route shadows it (matching name="play").
+@app.post("/keyframes/play", dependencies=[Depends(require_operator)])
+async def play_keyframes(req: KeyframePlayRequest) -> dict:
+    """Replay a sequence of taught poses as one smooth min-jerk motion."""
+    if ctx.hardware is None:
+        raise HTTPException(status_code=503, detail="hardware not ready")
+    seg = req.segment_duration or KEYFRAME_SEGMENT_SEC
+    snapshot = await ctx.hardware.read()
+    start = {n: js.position for n, js in snapshot.joints.items()}
+    try:
+        traj = ctx.keyframes.build_trajectory(req.names, segment_duration=seg, start_pose=start)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    await _play(f"keyframes:{'+'.join(req.names)}", traj)
+    return {"ok": True, "names": req.names, "duration": traj.duration}
+
+
+@app.post("/keyframes/{name}", dependencies=[Depends(require_operator)])
+async def record_keyframe(name: str) -> dict:
+    """Capture the current joint positions under `name`. Pair with the
+    bring-up tool's torque-off mode (or a future UI toggle) to teach poses
+    by hand."""
+    if ctx.hardware is None:
+        raise HTTPException(status_code=503, detail="hardware not ready")
+    snapshot = await ctx.hardware.read()
+    pose = {n: js.position for n, js in snapshot.joints.items()}
+    await ctx.keyframes.record(name, pose)
+    return {"ok": True, "name": name, "pose": pose}
+
+
+@app.delete("/keyframes/{name}", dependencies=[Depends(require_operator)])
+async def delete_keyframe(name: str) -> dict:
+    if not await ctx.keyframes.delete(name):
+        raise HTTPException(status_code=404, detail=f"unknown keyframe: {name}")
+    return {"ok": True, "name": name}
 
 
 class AICommandRequest(BaseModel):

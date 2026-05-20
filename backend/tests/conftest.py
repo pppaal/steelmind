@@ -16,14 +16,18 @@ _CAL_FD, _CAL_PATH = tempfile.mkstemp(prefix="steelmind-cal-", suffix=".json")
 os.close(_CAL_FD)
 os.unlink(_CAL_PATH)  # absent file → empty calibration, which is what we want
 os.environ.setdefault("CALIBRATION_FILE", _CAL_PATH)
+_KF_FD, _KF_PATH = tempfile.mkstemp(prefix="steelmind-kf-", suffix=".json")
+os.close(_KF_FD)
+os.unlink(_KF_PATH)
+os.environ.setdefault("KEYFRAMES_FILE", _KF_PATH)
 
 
 @pytest.fixture()
 def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Return a TestClient against a freshly-imported backend.main, with a
-    per-test JOURNAL_DB + CALIBRATION_FILE and a clean state machine. Tests
-    that previously shared the module-level `ctx` (and so leaked state
-    across the suite) should depend on this fixture instead of `client`."""
+    """Return a TestClient against a freshly-imported backend.main, with
+    per-test JOURNAL_DB + CALIBRATION_FILE + KEYFRAMES_FILE and a clean
+    state machine. Tests that previously shared the module-level `ctx`
+    (and so leaked state across the suite) should use this, not `client`."""
     fd, path = tempfile.mkstemp(prefix="steelmind-fresh-", suffix=".db")
     os.close(fd)
     monkeypatch.setenv("JOURNAL_DB", path)
@@ -31,6 +35,10 @@ def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     os.close(cfd)
     os.unlink(cpath)
     monkeypatch.setenv("CALIBRATION_FILE", cpath)
+    kfd, kpath = tempfile.mkstemp(prefix="steelmind-fresh-kf-", suffix=".json")
+    os.close(kfd)
+    os.unlink(kpath)
+    monkeypatch.setenv("KEYFRAMES_FILE", kpath)
     # Drop the cached module so import-time globals (ctx, configure_logging
     # handlers) rebind against the new env.
     for name in list(sys.modules):
@@ -39,7 +47,7 @@ def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     main = importlib.import_module("backend.main")
     with TestClient(main.app) as client:
         yield client
-    for p in (path, cpath):
+    for p in (path, cpath, kpath):
         try:
             os.unlink(p)
         except OSError:

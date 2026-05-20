@@ -14,3 +14,4 @@ env/
 steelmind.db
 *.db-journal
 calibration.json
+keyframes.json

@@ -1,10 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AICommandInput from "@/components/AICommandInput";
 import CommandBar from "@/components/CommandBar";
 import EventLog from "@/components/EventLog";
+import HardwarePanel from "@/components/HardwarePanel";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import TelemetryPanel from "@/components/TelemetryPanel";
 import { deriveApiBase } from "@/lib/api";
@@ -16,6 +17,23 @@ export default function Page() {
   const { connection, status, sensor, history, log, lastReason, sendCommand } = useRobotSocket();
   const state = status?.state ?? "IDLE";
   const apiBase = useMemo(() => deriveApiBase(), []);
+
+  // Joint names are discovered from the live sensor stream and cached so the
+  // jog panel stays stable even between frames where a joint is momentarily
+  // absent.
+  const jointSeen = useRef<Set<string>>(new Set());
+  const [jointNames, setJointNames] = useState<string[]>([]);
+  useEffect(() => {
+    if (!sensor) return;
+    let changed = false;
+    for (const name of Object.keys(sensor.joint_positions)) {
+      if (!jointSeen.current.has(name)) {
+        jointSeen.current.add(name);
+        changed = true;
+      }
+    }
+    if (changed) setJointNames([...jointSeen.current].sort());
+  }, [sensor]);
 
   return (
     <main className="flex h-screen w-screen flex-col bg-zinc-950 text-zinc-100">
@@ -39,6 +57,7 @@ export default function Page() {
           <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
           <EventLog entries={log} />
         </div>
+        <HardwarePanel apiBase={apiBase} jointNames={jointNames} />
         <TelemetryPanel
           connection={connection}
           status={status}
