@@ -71,6 +71,25 @@ export interface PlanStepFailedEvent {
   detail: string;
 }
 
+export interface RoutineStartedEvent {
+  type: "routine_started";
+  name: string;
+  steps: number;
+}
+
+export interface RoutineStepEvent {
+  type: "routine_step";
+  name: string;
+  index: number;
+  step: string;
+}
+
+export interface RoutineDoneEvent {
+  type: "routine_complete" | "routine_cancelled" | "routine_failed";
+  name: string;
+  detail?: string;
+}
+
 export type ServerEvent =
   | StateTransitionEvent
   | SensorEvent
@@ -79,6 +98,9 @@ export type ServerEvent =
   | AICommandEvent
   | PlanCompletedEvent
   | PlanStepFailedEvent
+  | RoutineStartedEvent
+  | RoutineStepEvent
+  | RoutineDoneEvent
   | { type: "ping" }
   | { type: "pong" }
   | { type: "error"; detail: string }

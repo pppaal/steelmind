@@ -103,3 +103,31 @@ describe("reduce", () => {
     expect(s.status?.state).toBe("STANDING");
   });
 });
+
+describe("routine progress", () => {
+  it("tracks start → step → complete", () => {
+    let s = reduce(emptyState(), { type: "routine_started", name: "greet", steps: 3 });
+    expect(s.routine).toEqual({ name: "greet", index: -1, total: 3, status: "running" });
+    s = reduce(s, { type: "routine_step", name: "greet", index: 0, step: "command" });
+    expect(s.routine?.index).toBe(0);
+    s = reduce(s, { type: "routine_step", name: "greet", index: 2, step: "command" });
+    expect(s.routine?.index).toBe(2);
+    s = reduce(s, { type: "routine_complete", name: "greet" });
+    expect(s.routine?.status).toBe("complete");
+  });
+
+  it("records failure detail", () => {
+    let s = reduce(emptyState(), { type: "routine_started", name: "x", steps: 1 });
+    s = reduce(s, { type: "routine_failed", name: "x", detail: "boom" });
+    expect(s.routine?.status).toBe("failed");
+    expect(s.routine?.detail).toBe("boom");
+  });
+
+  it("ignores step events for a different routine", () => {
+    let s = reduce(emptyState(), { type: "routine_started", name: "a", steps: 2 });
+    s = reduce(s, { type: "routine_step", name: "b", index: 5, step: "command" });
+    // unchanged — the stale "b" event must not move "a"'s progress
+    expect(s.routine?.name).toBe("a");
+    expect(s.routine?.index).toBe(-1);
+  });
+});

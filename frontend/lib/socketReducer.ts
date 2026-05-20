@@ -14,12 +14,21 @@ export type LogEntry =
   | { kind: "transition"; id: number; t: string; from: RobotState; to: RobotState; reason: string | null }
   | { kind: "ai"; id: number; t: string; input: string; command: string; explanation: string };
 
+export interface RoutineProgress {
+  name: string;
+  index: number; // current step (0-based); -1 before the first step runs
+  total: number;
+  status: "running" | "complete" | "cancelled" | "failed";
+  detail?: string;
+}
+
 export interface SocketState {
   status: RobotStatus | null;
   sensor: SensorData | null;
   history: SensorHistory;
   log: LogEntry[];
   lastReason: string | null;
+  routine: RoutineProgress | null;
   nextId: number;
 }
 
@@ -34,6 +43,7 @@ export function emptyState(): SocketState {
     history: emptyHistory(),
     log: [],
     lastReason: null,
+    routine: null,
     nextId: 0,
   };
 }
@@ -88,6 +98,27 @@ export function reduce(state: SocketState, evt: ServerEvent): SocketState {
         explanation: evt.explanation,
       });
       return { ...state, log, nextId: state.nextId + 1 };
+    }
+    case "routine_started":
+      return {
+        ...state,
+        routine: { name: evt.name, index: -1, total: evt.steps, status: "running" },
+      };
+    case "routine_step":
+      // Only advance the routine we think is running (ignore stale events).
+      if (!state.routine || state.routine.name !== evt.name) return state;
+      return { ...state, routine: { ...state.routine, index: evt.index } };
+    case "routine_complete":
+    case "routine_cancelled":
+    case "routine_failed": {
+      if (!state.routine || state.routine.name !== evt.name) return state;
+      const status =
+        evt.type === "routine_complete"
+          ? "complete"
+          : evt.type === "routine_cancelled"
+            ? "cancelled"
+            : "failed";
+      return { ...state, routine: { ...state.routine, status, detail: evt.detail } };
     }
     default:
       return state;

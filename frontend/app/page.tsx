@@ -14,7 +14,8 @@ import { useRobotSocket } from "@/lib/useRobotSocket";
 const RobotScene = dynamic(() => import("@/components/RobotScene"), { ssr: false });
 
 export default function Page() {
-  const { connection, status, sensor, history, log, lastReason, sendCommand } = useRobotSocket();
+  const { connection, status, sensor, history, log, lastReason, routine, sendCommand } =
+    useRobotSocket();
   const state = status?.state ?? "IDLE";
   const apiBase = useMemo(() => deriveApiBase(), []);
 
@@ -57,7 +58,7 @@ export default function Page() {
           <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
           <EventLog entries={log} />
         </div>
-        <HardwarePanel apiBase={apiBase} jointNames={jointNames} />
+        <HardwarePanel apiBase={apiBase} jointNames={jointNames} routine={routine} />
         <TelemetryPanel
           connection={connection}
           status={status}

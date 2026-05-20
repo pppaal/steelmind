@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import RoutineBuilder from "./RoutineBuilder";
 import { authHeaders } from "@/lib/api";
+import type { RoutineProgress } from "@/lib/useRobotSocket";
 
 interface Props {
   apiBase: string;
   jointNames: string[];
+  routine?: RoutineProgress | null;
 }
 
 interface KeyframesResponse {
@@ -15,7 +17,7 @@ interface KeyframesResponse {
 
 const JOG_STEP = 0.15; // rad, ~8.6° per click — under the server's MAX_JOG_RAD
 
-export default function HardwarePanel({ apiBase, jointNames }: Props) {
+export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
   const [keyframes, setKeyframes] = useState<string[]>([]);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -307,6 +309,38 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
         <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
           Routines
         </div>
+        {routine && routine.status === "running" && (
+          <div className="rounded-md border border-indigo-700 bg-indigo-950/50 px-2 py-1.5">
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="font-mono text-indigo-300">▶ {routine.name}</span>
+              <span className="text-indigo-400">
+                {Math.max(0, routine.index + 1)}/{routine.total}
+              </span>
+            </div>
+            <div className="mt-1 h-1 overflow-hidden rounded bg-indigo-900">
+              <div
+                className="h-full bg-indigo-400 transition-all"
+                style={{
+                  width: `${routine.total > 0 ? (Math.max(0, routine.index + 1) / routine.total) * 100 : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {routine && routine.status !== "running" && (
+          <div
+            className={`rounded-md px-2 py-1 text-[10px] ${
+              routine.status === "complete"
+                ? "text-emerald-400"
+                : routine.status === "cancelled"
+                  ? "text-zinc-500"
+                  : "text-rose-400"
+            }`}
+          >
+            {routine.name}: {routine.status}
+            {routine.detail ? ` — ${routine.detail}` : ""}
+          </div>
+        )}
         <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
           {routines.length > 0 &&
             routines.map((r) => (

@@ -6,6 +6,7 @@ import {
   emptyState,
   reduce,
   type LogEntry,
+  type RoutineProgress,
   type SensorHistory,
   type SocketState,
 } from "./socketReducer";
@@ -13,7 +14,7 @@ import type { RobotStatus, SensorData, ServerEvent } from "./types";
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
-export type { LogEntry, SensorHistory } from "./socketReducer";
+export type { LogEntry, RoutineProgress, SensorHistory } from "./socketReducer";
 
 export interface RobotSocket {
   connection: ConnectionState;
@@ -22,6 +23,7 @@ export interface RobotSocket {
   history: SensorHistory;
   log: LogEntry[];
   lastReason: string | null;
+  routine: RoutineProgress | null;
   sendCommand: (command: string, params?: Record<string, unknown>) => void;
 }
 
@@ -111,6 +113,7 @@ export function useRobotSocket(): RobotSocket {
     history: state.history,
     log: state.log,
     lastReason: state.lastReason,
+    routine: state.routine,
     sendCommand,
   };
 }
