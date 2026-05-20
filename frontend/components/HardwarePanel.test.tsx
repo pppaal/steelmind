@@ -89,4 +89,27 @@ describe("HardwarePanel", () => {
     const reach = calls.find((c) => c.url.endsWith("/reach"))!;
     expect(reach.body).toMatchObject({ x: 0.15, y: 0.1 });
   });
+
+  it("imports a routine file via PUT", async () => {
+    const calls: { url: string; method?: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url, init) => {
+        calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body as string) : null });
+        return { keyframes: {}, routines: {}, behaviors: [] };
+      }),
+    );
+    render(<HardwarePanel apiBase="http://x" jointNames={[]} />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const json = JSON.stringify({ name: "greet", steps: [{ type: "command", command: "stand" }] });
+    const file = new File([json], "routine-greet.json", { type: "application/json" });
+    // jsdom's File doesn't implement .text(); provide it for the component.
+    Object.defineProperty(file, "text", { value: async () => json });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/routines/greet"))).toBe(true),
+    );
+    const put = calls.find((c) => c.method === "PUT")!;
+    expect(put.body).toEqual({ steps: [{ type: "command", command: "stand" }] });
+  });
 });

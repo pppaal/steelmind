@@ -43,6 +43,30 @@ def test_save_and_list_routine(fresh_app: TestClient) -> None:
     assert len(listing["demo"]) == 3
 
 
+def test_get_single_routine(fresh_app: TestClient) -> None:
+    fresh_app.put("/routines/demo", json={"steps": [{"type": "command", "command": "stand"}]})
+    r = fresh_app.get("/routines/demo")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "demo"
+    # The CommandStep model normalizes in a `params: {}` default on save.
+    assert body["steps"] == [{"type": "command", "command": "stand", "params": {}}]
+
+
+def test_get_unknown_routine_404(fresh_app: TestClient) -> None:
+    assert fresh_app.get("/routines/ghost").status_code == 404
+
+
+def test_export_import_round_trip(fresh_app: TestClient) -> None:
+    # Export one routine, re-import under a new name, confirm equality after
+    # both have passed through the model normalization.
+    steps = [{"type": "command", "command": "stand"}, {"type": "behavior", "behavior": "wave"}]
+    fresh_app.put("/routines/original", json={"steps": steps})
+    exported = fresh_app.get("/routines/original").json()
+    fresh_app.put("/routines/copy", json={"steps": exported["steps"]})
+    assert fresh_app.get("/routines/copy").json()["steps"] == exported["steps"]
+
+
 def test_save_rejects_unknown_behavior(fresh_app: TestClient) -> None:
     r = fresh_app.put("/routines/bad", json={"steps": [{"type": "behavior", "behavior": "moonwalk"}]})
     assert r.status_code == 400

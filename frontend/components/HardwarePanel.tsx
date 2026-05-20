@@ -127,6 +127,39 @@ export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
       setEstopped(false);
     });
 
+  const exportRoutine = (name: string) =>
+    run(async () => {
+      const res = await fetch(`${apiBase}/routines/${encodeURIComponent(name)}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error(`export failed: ${res.status}`);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `routine-${name}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+  const importRoutine = (file: File) =>
+    run(async () => {
+      const text = await file.text();
+      let parsed: { name?: string; steps?: unknown };
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("not valid JSON");
+      }
+      if (!parsed.steps || !Array.isArray(parsed.steps)) throw new Error("missing steps[]");
+      // Default the name from the file's name field or the filename.
+      const name = (parsed.name || file.name.replace(/\.json$/, "").replace(/^routine-/, "")).trim();
+      if (!name) throw new Error("could not derive a routine name");
+      await post(`/routines/${encodeURIComponent(name)}`, { steps: parsed.steps }, "PUT");
+      await refreshRoutines();
+    });
+
   const recordKeyframe = () =>
     run(async () => {
       const name = newName.trim();
@@ -346,15 +379,38 @@ export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
             routines.map((r) => (
               <div key={r} className="flex items-center justify-between gap-2">
                 <span className="truncate font-mono text-[11px] text-zinc-300">{r}</span>
-                <button
-                  onClick={() => run(() => post(`/routines/${encodeURIComponent(r)}/run`))}
-                  disabled={busy || estopped}
-                  className="shrink-0 rounded border border-indigo-600 px-2 py-0.5 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-600/20 disabled:opacity-40"
-                >
-                  ▶ run
-                </button>
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => exportRoutine(r)}
+                    disabled={busy}
+                    title="export as JSON"
+                    className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-zinc-500 disabled:opacity-40"
+                  >
+                    ⬇
+                  </button>
+                  <button
+                    onClick={() => run(() => post(`/routines/${encodeURIComponent(r)}/run`))}
+                    disabled={busy || estopped}
+                    className="rounded border border-indigo-600 px-2 py-0.5 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-600/20 disabled:opacity-40"
+                  >
+                    ▶ run
+                  </button>
+                </div>
               </div>
             ))}
+          <label className="block cursor-pointer rounded border border-zinc-700 px-2 py-1 text-center text-[11px] text-zinc-400 hover:border-sky-500 hover:text-zinc-200">
+            ⬆ import routine
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void importRoutine(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
           <RoutineBuilder
             apiBase={apiBase}
             behaviors={behaviors}

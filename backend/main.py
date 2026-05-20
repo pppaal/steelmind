@@ -968,6 +968,15 @@ async def list_routines() -> dict:
     return {"routines": ctx.routines.all()}
 
 
+@app.get("/routines/{name}", dependencies=[Depends(require_viewer)])
+async def get_routine(name: str) -> dict:
+    """Single routine, for export/sharing. 404 if unknown."""
+    steps = ctx.routines.get(name)
+    if steps is None:
+        raise HTTPException(status_code=404, detail=f"unknown routine: {name}")
+    return {"name": name, "steps": steps}
+
+
 @app.put("/routines/{name}", dependencies=[Depends(require_operator)])
 async def save_routine(name: str, body: RoutineBody) -> dict:
     _validate_routine_steps(body.steps)
