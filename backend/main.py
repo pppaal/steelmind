@@ -34,7 +34,9 @@ from .auth import (
 )
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
+from .calibration import Calibration
 from .hardware import RobotHardware, build_hardware
+from .hardware.base import JointSpec
 from .journal import Journal
 from .journal_base import JournalBase
 from .logging_setup import configure as configure_logging
@@ -81,6 +83,24 @@ WS_HEARTBEAT_TIMEOUT_SEC = float(os.getenv("WS_HEARTBEAT_TIMEOUT_SEC", "60"))
 AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "20"))
 ROBOT_CONFIG = os.getenv("ROBOT_CONFIG", "backend/configs/sim_humanoid.json")
 HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
+CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
+# Largest single jog step a /jog call may request, radians. Keeps a fat-
+# fingered operator from commanding a 180° slam in one click.
+MAX_JOG_RAD = float(os.getenv("MAX_JOG_RAD", "0.35"))  # ~20 degrees
+
+
+import dataclasses  # noqa: E402 - grouped with the helper that uses it
+
+
+def _apply_calibration(joints: list[JointSpec], calib: Calibration) -> list[JointSpec]:
+    """Fold runtime calibration offsets on top of each joint's config offset.
+
+    JointSpec is frozen, so we return fresh specs. The HAL only ever sees
+    the combined offset, keeping calibration transparent to the drivers."""
+    return [
+        dataclasses.replace(j, offset=j.offset + calib.offset_for(j.name))
+        for j in joints
+    ]
 
 
 class ConnectionManager:
@@ -269,6 +289,8 @@ class AppContext:
         # bus open failures hit the lifespan handler with a real log line
         # instead of breaking module import.
         self.hardware: RobotHardware | None = None
+        self.joints: list[JointSpec] = []
+        self.calibration = Calibration(CALIBRATION_FILE)
         self.current_behavior_task: asyncio.Task[None] | None = None
         self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
@@ -279,8 +301,9 @@ class AppContext:
     async def start(self) -> None:
         self.journal = _build_journal()
         await self.journal.init()
-        joints = load_config(ROBOT_CONFIG)
-        self.hardware = build_hardware(joints)
+        await self.calibration.load()
+        self.joints = _apply_calibration(load_config(ROBOT_CONFIG), self.calibration)
+        self.hardware = build_hardware(self.joints)
         await self.hardware.init()
         # The watchdog fires HAL.estop() if the sensor loop stops feeding
         # it — covers a hung asyncio loop, a deadlocked bus thread, or a
@@ -514,6 +537,62 @@ async def estop() -> dict:
     ctx.state_machine.set_behavior(None)
     ctx.state_machine.set_error("estop latched")
     return {"ok": True, "estopped": True}
+
+
+class JogRequest(BaseModel):
+    joint: str
+    delta: float  # radians, relative to current target
+
+
+@app.post("/jog", dependencies=[Depends(require_operator)])
+async def jog(req: JogRequest) -> dict:
+    """Nudge a single joint by a small relative delta. The safe primitive
+    for bring-up/testing — bounded by MAX_JOG_RAD and the joint's own soft
+    limits (clamped inside the HAL). Reads current position, adds delta,
+    writes the new absolute target."""
+    if ctx.hardware is None:
+        raise HTTPException(status_code=503, detail="hardware not ready")
+    spec = next((j for j in ctx.joints if j.name == req.joint), None)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown joint: {req.joint}")
+    if abs(req.delta) > MAX_JOG_RAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"delta {req.delta:.3f} exceeds MAX_JOG_RAD {MAX_JOG_RAD}",
+        )
+    await ctx.hardware.enable()
+    snapshot = await ctx.hardware.read()
+    current = snapshot.joints[req.joint].position if req.joint in snapshot.joints else 0.0
+    target = spec.clamp(current + req.delta)
+    await ctx.hardware.write({req.joint: target})
+    return {"ok": True, "joint": req.joint, "target": target}
+
+
+@app.get("/calibration", dependencies=[Depends(require_viewer)])
+async def get_calibration() -> dict:
+    return {"offsets": ctx.calibration.offsets}
+
+
+class CalibrationRequest(BaseModel):
+    offsets: dict[str, float]
+
+
+@app.post("/calibration", dependencies=[Depends(require_admin)])
+async def set_calibration(req: CalibrationRequest) -> dict:
+    """Persist per-joint offsets and re-fold them into the live joint specs
+    without a restart. Admin-only — miscalibration can drive a joint into a
+    hard stop."""
+    known = {j.name for j in ctx.joints}
+    unknown = set(req.offsets) - known
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown joints: {sorted(unknown)}")
+    await ctx.calibration.set_many(req.offsets)
+    # Re-apply against the freshly-loaded config so offsets compose correctly
+    # rather than stacking on the already-calibrated specs.
+    ctx.joints = _apply_calibration(load_config(ROBOT_CONFIG), ctx.calibration)
+    if ctx.hardware is not None:
+        ctx.hardware.update_specs(ctx.joints)
+    return {"ok": True, "offsets": ctx.calibration.offsets}
 
 
 @app.post("/estop/clear", dependencies=[Depends(require_admin)])

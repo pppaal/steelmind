@@ -73,11 +73,25 @@ class HardwareError(Exception):
 
 
 class RobotHardware(ABC):
-    """The contract every backend implementation must honor."""
+    """The contract every backend implementation must honor.
+
+    Implementations store their joint list in `_joints` and a name→spec map
+    in `_joints_by_name`; the concrete update_specs() below swaps both so
+    runtime recalibration doesn't need to reopen the bus."""
+
+    _joints: list[JointSpec]
+    _joints_by_name: dict[str, JointSpec]
 
     @property
     @abstractmethod
     def joints(self) -> list[JointSpec]: ...
+
+    def update_specs(self, joints: list[JointSpec]) -> None:
+        """Hot-swap joint specs (e.g. after a calibration change). Only the
+        offsets/limits change — joint identity (name, hardware_id) must be
+        stable, so no bus re-init is required."""
+        self._joints = list(joints)
+        self._joints_by_name = {j.name: j for j in joints}
 
     @abstractmethod
     async def init(self) -> None:

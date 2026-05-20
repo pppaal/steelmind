@@ -13,3 +13,4 @@ env/
 .ruff_cache/
 steelmind.db
 *.db-journal
+calibration.json

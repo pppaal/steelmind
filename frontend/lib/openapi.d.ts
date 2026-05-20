@@ -65,6 +65,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jog
+         * @description Nudge a single joint by a small relative delta. The safe primitive
+         *     for bring-up/testing — bounded by MAX_JOG_RAD and the joint's own soft
+         *     limits (clamped inside the HAL). Reads current position, adds delta,
+         *     writes the new absolute target.
+         */
+        post: operations["jog_jog_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Calibration */
+        get: operations["get_calibration_calibration_get"];
+        put?: never;
+        /**
+         * Set Calibration
+         * @description Persist per-joint offsets and re-fold them into the live joint specs
+         *     without a restart. Admin-only — miscalibration can drive a joint into a
+         *     hard stop.
+         */
+        post: operations["set_calibration_calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/estop/clear": {
         parameters: {
             query?: never;
@@ -258,6 +304,13 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
+        /** CalibrationRequest */
+        CalibrationRequest: {
+            /** Offsets */
+            offsets: {
+                [key: string]: number;
+            };
+        };
         /** CommandRequest */
         CommandRequest: {
             /** Command */
@@ -279,6 +332,13 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** JogRequest */
+        JogRequest: {
+            /** Joint */
+            joint: string;
+            /** Delta */
+            delta: number;
         };
         /**
          * RobotState
@@ -384,6 +444,98 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    jog_jog_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_calibration_calibration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    set_calibration_calibration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

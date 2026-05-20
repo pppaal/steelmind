@@ -33,16 +33,34 @@ _ADDR_PRESENT_VELOCITY = 128
 _ADDR_PRESENT_CURRENT = 126
 _ADDR_PRESENT_INPUT_VOLTAGE = 144
 
-# X-series encoder: 4096 counts per revolution.
+# X-series encoder: 4096 counts per revolution, 2048 = center (0 rad).
 _COUNTS_PER_REV = 4096
+_CENTER = _COUNTS_PER_REV // 2
 
 
 def _rad_to_counts(rad: float) -> int:
-    return int((rad / (2 * math.pi)) * _COUNTS_PER_REV) + _COUNTS_PER_REV // 2
+    return round((rad / (2 * math.pi)) * _COUNTS_PER_REV) + _CENTER
 
 
 def _counts_to_rad(counts: int) -> float:
-    return (counts - _COUNTS_PER_REV // 2) * (2 * math.pi) / _COUNTS_PER_REV
+    return (counts - _CENTER) * (2 * math.pi) / _COUNTS_PER_REV
+
+
+def to_motor_counts(logical_rad: float, spec: JointSpec) -> int:
+    """Logical (URDF/behavior) radians → raw encoder counts to write.
+
+    Applies invert then offset so the same logical command lands at the same
+    physical pose regardless of how the servo horn was mounted."""
+    corrected = -logical_rad if spec.invert else logical_rad
+    corrected += spec.offset
+    return _rad_to_counts(corrected)
+
+
+def from_motor_counts(counts: int, spec: JointSpec) -> float:
+    """Raw encoder counts → logical radians. Exact inverse of
+    to_motor_counts: remove offset, then undo invert."""
+    rad = _counts_to_rad(counts) - spec.offset
+    return -rad if spec.invert else rad
 
 
 class DynamixelHardware(RobotHardware):
@@ -188,19 +206,29 @@ class DynamixelHardware(RobotHardware):
 
     def _set_torque_all(self, enabled: bool) -> None:
         flag = 1 if enabled else 0
+        failures: list[str] = []
         for spec in self._joints:
-            self._packet_handler.write1ByteTxRx(
+            comm, err = self._packet_handler.write1ByteTxRx(
                 self._port_handler, int(spec.hardware_id), _ADDR_TORQUE_ENABLE, flag
             )
+            # dynamixel-sdk returns (comm_result, dxl_error). Non-zero on
+            # either means the servo didn't accept the write — surface it
+            # so a dead/miswired motor doesn't fail silently.
+            if comm != 0 or err != 0:
+                failures.append(f"id={spec.hardware_id}(comm={comm},err={err})")
+        if failures:
+            self._warnings = (f"torque write failed: {', '.join(failures)}",)
 
     def _sync_write_positions(self, positions: dict[str, float]) -> None:
         self._group_sync_write.clearParam()
         for spec in self._joints:
             value = positions.get(spec.name, 0.0)
-            corrected = -value if spec.invert else value
-            corrected += spec.offset
-            counts = _rad_to_counts(corrected)
-            param = counts.to_bytes(4, "little", signed=True)
+            counts = to_motor_counts(value, spec)
+            # Goal_Position is an unsigned 4-byte register (0..4095 for a
+            # single-turn X-series). Clamp into range defensively so a
+            # rounding overshoot can't wrap to a wild value.
+            counts = max(0, min(_COUNTS_PER_REV - 1, counts))
+            param = counts.to_bytes(4, "little", signed=False)
             self._group_sync_write.addParam(int(spec.hardware_id), param)
         self._group_sync_write.txPacket()
 
@@ -208,14 +236,10 @@ class DynamixelHardware(RobotHardware):
         self._group_sync_read.txRxPacket()
         out: dict[str, float] = {}
         for spec in self._joints:
-            counts = self._group_sync_read.getData(
-                int(spec.hardware_id), _ADDR_PRESENT_POSITION, 4
+            counts = int(
+                self._group_sync_read.getData(
+                    int(spec.hardware_id), _ADDR_PRESENT_POSITION, 4
+                )
             )
-            rad = _counts_to_rad(int.from_bytes(
-                int(counts).to_bytes(4, "little", signed=False), "little", signed=True
-            ))
-            rad -= spec.offset
-            if spec.invert:
-                rad = -rad
-            out[spec.name] = rad
+            out[spec.name] = from_motor_counts(counts, spec)
         return out
