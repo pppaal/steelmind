@@ -406,6 +406,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ai-routine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ai Routine
+         * @description Natural language → a saved routine. The AI composes loosely-typed
+         *     steps; we validate them strictly with the routine step models (one
+         *     repair retry on failure), save under `name`, and optionally run.
+         */
+        post: operations["ai_routine_ai_routine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ai-command": {
         parameters: {
             query?: never;
@@ -458,6 +480,18 @@ export interface components {
             executed: boolean;
             /** Detail */
             detail?: string | null;
+        };
+        /** AIRoutineRequest */
+        AIRoutineRequest: {
+            /** Text */
+            text: string;
+            /** Name */
+            name: string;
+            /**
+             * Run
+             * @default false
+             */
+            run: boolean;
         };
         /** BehaviorStep */
         BehaviorStep: {
@@ -1261,6 +1295,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ai_routine_ai_routine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AIRoutineRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

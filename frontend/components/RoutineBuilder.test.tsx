@@ -88,3 +88,33 @@ it("shows the reach option when a chain exists", () => {
   );
   expect(options).toContain("reach");
 });
+
+it("hides the AI input unless aiEnabled", () => {
+  render(
+    <RoutineBuilder apiBase="http://x" behaviors={["wave"]} hasChain={false} onSaved={() => {}} />,
+  );
+  expect(screen.queryByPlaceholderText("AI: describe a routine…")).toBeNull();
+});
+
+it("posts to /ai-routine when the AI generate button is used", async () => {
+  const calls: { url: string; body: unknown }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(init.body as string) : null });
+      return { ok: true, json: async () => ({ ok: true, steps: [] }) };
+    }) as unknown as typeof fetch,
+  );
+  const onSaved = vi.fn();
+  render(
+    <RoutineBuilder apiBase="http://x" behaviors={["wave"]} hasChain={false} onSaved={onSaved} aiEnabled />,
+  );
+  fireEvent.change(screen.getByPlaceholderText("AI: describe a routine…"), {
+    target: { value: "wave then sit" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "gen" }));
+  await waitFor(() => expect(calls.some((c) => c.url.endsWith("/ai-routine"))).toBe(true));
+  const gen = calls.find((c) => c.url.endsWith("/ai-routine"))!;
+  expect((gen.body as { text: string }).text).toBe("wave then sit");
+  expect(onSaved).toHaveBeenCalled();
+});

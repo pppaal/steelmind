@@ -27,6 +27,7 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
   const [fk, setFk] = useState<{ x: number; y: number } | null>(null);
   const [routines, setRoutines] = useState<string[]>([]);
   const [behaviors, setBehaviors] = useState<string[]>([]);
+  const [aiEnabled, setAiEnabled] = useState(false);
 
   const post = useCallback(
     async (path: string, body?: unknown, method = "POST") => {
@@ -91,6 +92,10 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
       .then((d) => {
         if (d?.behaviors) setBehaviors(d.behaviors.map((b: { name: string }) => b.name));
       })
+      .catch(() => {});
+    fetch(`${apiBase}/health`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setAiEnabled(Boolean(d?.ai_enabled)))
       .catch(() => {});
   }, [apiBase, refreshKeyframes, refreshFk, refreshRoutines]);
 
@@ -321,6 +326,7 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
             behaviors={behaviors}
             hasChain={hasChain}
             onSaved={refreshRoutines}
+            aiEnabled={aiEnabled}
           />
         </div>
       </div>

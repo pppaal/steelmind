@@ -14,6 +14,7 @@ interface Props {
   behaviors: string[];
   hasChain: boolean;
   onSaved: () => void;
+  aiEnabled?: boolean;
 }
 
 const COMMANDS = ["stand", "walk", "idle", "stop"];
@@ -31,10 +32,12 @@ function stepLabel(s: Step): string {
   }
 }
 
-export default function RoutineBuilder({ apiBase, behaviors, hasChain, onSaved }: Props) {
+export default function RoutineBuilder({ apiBase, behaviors, hasChain, onSaved, aiEnabled }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [steps, setSteps] = useState<Step[]>([]);
+  const [aiText, setAiText] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
   const [stepType, setStepType] = useState<Step["type"]>("command");
   // Per-type draft inputs.
   const [cmd, setCmd] = useState("stand");
@@ -85,14 +88,60 @@ export default function RoutineBuilder({ apiBase, behaviors, hasChain, onSaved }
     }
   };
 
+  const aiGenerate = async () => {
+    const text = aiText.trim();
+    if (!text) return;
+    setAiBusy(true);
+    setError(null);
+    try {
+      // Derive a routine name from the prompt (slugified, short).
+      const slug = text.toLowerCase().replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "ai-routine";
+      const res = await fetch(`${apiBase}/ai-routine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ text, name: slug, run: false }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(body.detail ?? `HTTP ${res.status}`);
+      }
+      setAiText("");
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="w-full rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 hover:border-sky-500 hover:text-zinc-200"
-      >
-        + new routine
-      </button>
+      <div className="space-y-1">
+        {aiEnabled && (
+          <div className="flex gap-1">
+            <input
+              value={aiText}
+              onChange={(e) => setAiText(e.target.value)}
+              placeholder="AI: describe a routine…"
+              className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-indigo-500"
+            />
+            <button
+              onClick={aiGenerate}
+              disabled={aiBusy || !aiText.trim()}
+              className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+            >
+              {aiBusy ? "…" : "gen"}
+            </button>
+          </div>
+        )}
+        {error && <div className="font-mono text-[10px] text-rose-400">{error}</div>}
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 hover:border-sky-500 hover:text-zinc-200"
+        >
+          + new routine
+        </button>
+      </div>
     );
   }
 

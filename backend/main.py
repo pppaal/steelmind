@@ -1003,6 +1003,83 @@ async def run_routine(name: str) -> dict:
     return {"ok": True, "name": name, "steps": len(body.steps)}
 
 
+class AIRoutineRequest(BaseModel):
+    text: str
+    name: str
+    run: bool = False
+
+
+@app.post("/ai-routine", dependencies=[Depends(require_operator)])
+async def ai_routine(req: AIRoutineRequest, request: Request) -> dict:
+    """Natural language → a saved routine. The AI composes loosely-typed
+    steps; we validate them strictly with the routine step models (one
+    repair retry on failure), save under `name`, and optionally run."""
+    if not ctx.ai.enabled:
+        raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    allowed, retry_after = await ctx.ai_rate.allow(request.client.host if request.client else "?")
+    if not allowed:
+        ctx.metrics.rate_limited_total += 1
+        raise HTTPException(status_code=429, detail=f"rate limited; retry in {retry_after:.1f}s")
+
+    has_chain = ctx.chain is not None
+    started = time.monotonic()
+    try:
+        result = await ctx.ai.compose_routine(text, has_chain=has_chain)
+        body, error = _coerce_routine(result.steps)
+        if body is None:
+            result = await ctx.ai.compose_routine(text, has_chain=has_chain, repair_context=error)
+            body, error = _coerce_routine(result.steps)
+            if body is None:
+                ctx.metrics.ai_errors_total += 1
+                raise HTTPException(status_code=502, detail=f"AI produced an invalid routine: {error}")
+    except AICommanderError as e:
+        ctx.metrics.ai_errors_total += 1
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    finally:
+        ctx.metrics.observe_ai_latency_ms((time.monotonic() - started) * 1000.0)
+
+    ctx.metrics.ai_commands_total += 1
+    await ctx.routines.save(req.name, [s.model_dump() for s in body.steps])
+
+    ran = False
+    if req.run:
+        if ctx.routine_task and not ctx.routine_task.done():
+            ctx.routine_task.cancel()
+        task = asyncio.create_task(_run_routine(req.name, body.steps))
+        ctx.routine_task = task
+        ctx.background_tasks.add(task)
+        task.add_done_callback(ctx.background_tasks.discard)
+        ran = True
+
+    return {
+        "ok": True,
+        "name": req.name,
+        "explanation": result.explanation,
+        "steps": [s.model_dump() for s in body.steps],
+        "running": ran,
+    }
+
+
+def _coerce_routine(raw_steps: list[dict]) -> tuple[RoutineBody | None, str | None]:
+    """Validate loosely-typed AI steps against the strict routine models,
+    then run the same semantic checks save_routine uses. Returns
+    (body, None) on success or (None, error) so the caller can ask the AI
+    to repair."""
+    try:
+        body = RoutineBody(steps=raw_steps)  # type: ignore[arg-type]
+    except Exception as e:
+        return None, f"schema error: {e}"
+    try:
+        _validate_routine_steps(body.steps)
+    except HTTPException as e:
+        return None, str(e.detail)
+    return body, None
+
+
 class AICommandRequest(BaseModel):
     text: str
 
