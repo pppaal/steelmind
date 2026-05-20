@@ -43,6 +43,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/estop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estop
+         * @description Latching emergency stop. Cancels any active behavior, force-transitions
+         *     to IDLE, and cuts torque via the hardware. Subsequent writes are silently
+         *     dropped until /estop/clear runs.
+         */
+        post: operations["estop_estop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/estop/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estop Clear
+         * @description Operator-initiated reset. Admin-only — clearing an E-stop should
+         *     require human acknowledgement, not be reachable from a stuck script.
+         */
+        post: operations["estop_clear_estop_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -302,6 +345,50 @@ export interface operations {
         };
     };
     ai_reset_ai_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    estop_estop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    estop_clear_estop_clear_post: {
         parameters: {
             query?: never;
             header?: never;

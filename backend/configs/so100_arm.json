@@ -1,0 +1,12 @@
+{
+  "name": "so100_arm",
+  "description": "LeRobot SO-100 6-DOF desktop arm. Hardware IDs match the LeRobot stack defaults.",
+  "joints": [
+    { "name": "shoulder_pan",  "hardware_id": "1", "lower_limit_deg": -180, "upper_limit_deg": 180, "max_velocity": 3.0 },
+    { "name": "shoulder_lift", "hardware_id": "2", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 2.5 },
+    { "name": "elbow_flex",    "hardware_id": "3", "lower_limit_deg": 0,    "upper_limit_deg": 135, "max_velocity": 3.0 },
+    { "name": "wrist_flex",    "hardware_id": "4", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 4.0 },
+    { "name": "wrist_roll",    "hardware_id": "5", "lower_limit_deg": -180, "upper_limit_deg": 180, "max_velocity": 5.0 },
+    { "name": "gripper",       "hardware_id": "6", "lower_limit_deg": 0,    "upper_limit_deg": 90,  "max_velocity": 6.0 }
+  ]
+}

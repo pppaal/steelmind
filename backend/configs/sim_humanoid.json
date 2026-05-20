@@ -1,0 +1,12 @@
+{
+  "name": "sim_humanoid",
+  "description": "Frontend-facing simulator joint set. Names match what RobotScene.tsx reads from joint_positions so the 3D model animates without a real robot connected.",
+  "joints": [
+    { "name": "hip_left",       "hardware_id": "sim-1", "lower_limit_deg": -90, "upper_limit_deg": 90, "max_velocity": 4.0 },
+    { "name": "hip_right",      "hardware_id": "sim-2", "lower_limit_deg": -90, "upper_limit_deg": 90, "max_velocity": 4.0 },
+    { "name": "knee_left",      "hardware_id": "sim-3", "lower_limit_deg": -90, "upper_limit_deg": 90, "max_velocity": 4.0 },
+    { "name": "knee_right",     "hardware_id": "sim-4", "lower_limit_deg": -90, "upper_limit_deg": 90, "max_velocity": 4.0 },
+    { "name": "shoulder_left",  "hardware_id": "sim-5", "lower_limit_deg": -180, "upper_limit_deg": 180, "max_velocity": 4.0 },
+    { "name": "shoulder_right", "hardware_id": "sim-6", "lower_limit_deg": -180, "upper_limit_deg": 180, "max_velocity": 4.0 }
+  ]
+}

@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
-import random
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -36,6 +34,7 @@ from .auth import (
 )
 from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
+from .hardware import RobotHardware, build_hardware
 from .journal import Journal
 from .journal_base import JournalBase
 from .logging_setup import configure as configure_logging
@@ -51,6 +50,8 @@ from .models import (
 )
 from .plan_validator import validate_plan
 from .rate_limit import TokenBucket
+from .robot_config import load_config
+from .safety import Watchdog
 from .secrets import env_or_file
 from .state_machine import InvalidTransitionError, StateMachine
 from .tracing import configure as configure_tracing
@@ -78,6 +79,8 @@ MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(64 * 1024)))  # 64 Ki
 WS_HEARTBEAT_SEC = float(os.getenv("WS_HEARTBEAT_SEC", "20"))
 WS_HEARTBEAT_TIMEOUT_SEC = float(os.getenv("WS_HEARTBEAT_TIMEOUT_SEC", "60"))
 AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "20"))
+ROBOT_CONFIG = os.getenv("ROBOT_CONFIG", "backend/configs/sim_humanoid.json")
+HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
 
 
 class ConnectionManager:
@@ -126,75 +129,21 @@ class ConnectionManager:
         return len(self._clients)
 
 
-def simulate_sensor(t: float, state: RobotState, behavior: str | None) -> SensorData:
-    hip_left = 0.0
-    hip_right = 0.0
-    knee_left = 0.0
-    knee_right = 0.0
-    shoulder_left = 0.0
-    shoulder_right = 0.0
-    body_tilt_x = 0.0
-    body_tilt_y = 0.0
-
-    if state == RobotState.WALKING:
-        hip_left = 0.4 * math.sin(t * 3)
-        hip_right = -0.4 * math.sin(t * 3)
-        knee_left = 0.3 * max(0.0, math.cos(t * 3))
-        knee_right = 0.3 * max(0.0, -math.cos(t * 3))
-        shoulder_left = -0.3 * math.sin(t * 3)
-        shoulder_right = 0.3 * math.sin(t * 3)
-        body_tilt_x = 0.08 * math.sin(t * 3)
-    elif state == RobotState.EXECUTING and behavior == "wave":
-        shoulder_right = -1.6 + 0.4 * math.sin(t * 6)
-        shoulder_left = 0.05 * math.sin(t * 6)
-    elif state == RobotState.EXECUTING and behavior == "squat":
-        depth = 0.5 * (1 - math.cos(t * 2)) / 2
-        hip_left = depth
-        hip_right = depth
-        knee_left = -depth * 1.6
-        knee_right = -depth * 1.6
-    elif state == RobotState.EXECUTING and behavior == "patrol":
-        hip_left = 0.45 * math.sin(t * 4)
-        hip_right = -0.45 * math.sin(t * 4)
-        knee_left = 0.35 * max(0.0, math.cos(t * 4))
-        knee_right = 0.35 * max(0.0, -math.cos(t * 4))
-        body_tilt_y = 0.4 * math.sin(t * 0.6)
-    elif state == RobotState.EXECUTING and behavior == "dance":
-        hip_left = 0.25 * math.sin(t * 5)
-        hip_right = -0.25 * math.sin(t * 5)
-        shoulder_left = -0.9 + 0.6 * math.sin(t * 5)
-        shoulder_right = -0.9 - 0.6 * math.sin(t * 5)
-        body_tilt_x = 0.15 * math.sin(t * 2.5)
-    elif state == RobotState.EXECUTING:
-        shoulder_left = 0.15 * math.sin(t * 3)
-        shoulder_right = -0.15 * math.sin(t * 3)
-    elif state == RobotState.STANDING:
-        body_tilt_x = 0.01 * math.sin(t * 1.2)
-    else:  # IDLE
-        body_tilt_x = 0.005 * math.sin(t * 0.8)
-
+def snapshot_to_sensor(snapshot) -> SensorData:
+    """Project a HAL snapshot into the wire-format SensorData the WS clients
+    already consume. Joint names that aren't in the snapshot just don't
+    appear in joint_positions — RobotScene.tsx tolerates missing joints."""
+    ori = snapshot.imu.orientation
+    ang = snapshot.imu.angular_velocity
+    acc = snapshot.imu.linear_acceleration
     return SensorData(
-        imu_orientation=Vector3(x=body_tilt_x, y=body_tilt_y, z=0.0),
-        imu_angular_velocity=Vector3(
-            x=body_tilt_x * math.cos(t),
-            y=body_tilt_y * math.cos(t),
-            z=0.0,
-        ),
-        imu_linear_acceleration=Vector3(z=9.81 + random.uniform(-0.05, 0.05)),
-        joint_positions={
-            "hip_left": hip_left,
-            "hip_right": hip_right,
-            "knee_left": knee_left,
-            "knee_right": knee_right,
-            "shoulder_left": shoulder_left,
-            "shoulder_right": shoulder_right,
-        },
-        joint_velocities={
-            "hip_left": hip_left,
-            "hip_right": hip_right,
-        },
-        battery_voltage=24.0 + random.uniform(-0.1, 0.1),
-        battery_percent=max(0.0, 100.0 - (t * 0.01) % 100.0),
+        imu_orientation=Vector3(x=ori[0], y=ori[1], z=ori[2]),
+        imu_angular_velocity=Vector3(x=ang[0], y=ang[1], z=ang[2]),
+        imu_linear_acceleration=Vector3(x=acc[0], y=acc[1], z=acc[2]),
+        joint_positions={n: js.position for n, js in snapshot.joints.items()},
+        joint_velocities={n: js.velocity for n, js in snapshot.joints.items()},
+        battery_voltage=snapshot.battery_voltage,
+        battery_percent=snapshot.battery_percent,
     )
 
 
@@ -316,6 +265,12 @@ class AppContext:
         self.background_tasks: set[asyncio.Task[None]] = set()
         self.current_tree: BehaviorTree | None = None
         self.behavior_lock = asyncio.Lock()
+        # Hardware + trajectory player. Built in start() so config load /
+        # bus open failures hit the lifespan handler with a real log line
+        # instead of breaking module import.
+        self.hardware: RobotHardware | None = None
+        self.current_behavior_task: asyncio.Task[None] | None = None
+        self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
         self._prune_task: asyncio.Task[None] | None = None
@@ -324,6 +279,16 @@ class AppContext:
     async def start(self) -> None:
         self.journal = _build_journal()
         await self.journal.init()
+        joints = load_config(ROBOT_CONFIG)
+        self.hardware = build_hardware(joints)
+        await self.hardware.init()
+        # The watchdog fires HAL.estop() if the sensor loop stops feeding
+        # it — covers a hung asyncio loop, a deadlocked bus thread, or a
+        # crashed pytest fixture leaking past lifespan.
+        self.watchdog = Watchdog(
+            expire_seconds=HARDWARE_WATCHDOG_SEC, on_expire=self.hardware.estop
+        )
+        self.watchdog.start()
         self._sensor_task = asyncio.create_task(self._sensor_loop())
         self._transition_task = asyncio.create_task(self._transition_loop())
         self._prune_task = asyncio.create_task(self._prune_loop())
@@ -359,7 +324,14 @@ class AppContext:
                     logger.exception("background task raised during shutdown")
         if self.current_tree:
             await self.current_tree.stop()
-        await self.journal.close()
+        if self.current_behavior_task and not self.current_behavior_task.done():
+            self.current_behavior_task.cancel()
+        if self.watchdog:
+            await self.watchdog.stop()
+        if self.hardware:
+            await self.hardware.close()
+        if self.journal:
+            await self.journal.close()
 
     async def _heartbeat_loop(self) -> None:
         """Server-driven ping. Every WS_HEARTBEAT_SEC we send a {type:'ping'}
@@ -407,13 +379,19 @@ class AppContext:
 
     async def _sensor_loop(self) -> None:
         period = 1.0 / SENSOR_HZ
-        t = 0.0
         while True:
-            status = self.state_machine.status
-            data = simulate_sensor(t, status.state, status.current_behavior)
-            await self.manager.broadcast(SensorEvent(data=data))
-            self.metrics.sensor_frames_total += 1
-            t += period
+            try:
+                assert self.hardware is not None
+                snapshot = await self.hardware.read()
+                if self.watchdog:
+                    self.watchdog.feed()
+                data = snapshot_to_sensor(snapshot)
+                await self.manager.broadcast(SensorEvent(data=data))
+                self.metrics.sensor_frames_total += 1
+            except Exception:
+                # A flaky read can't take down the loop — log once and
+                # keep cycling so the watchdog gets to make the decision.
+                logger.exception("sensor loop iteration failed")
             await asyncio.sleep(period)
 
     async def _transition_loop(self) -> None:
@@ -523,6 +501,31 @@ async def ai_reset(request: Request) -> dict:
     return {"ok": True, "ai_history": ctx.ai.history_length()}
 
 
+@app.post("/estop", dependencies=[Depends(require_operator)])
+async def estop() -> dict:
+    """Latching emergency stop. Cancels any active behavior, force-transitions
+    to IDLE, and cuts torque via the hardware. Subsequent writes are silently
+    dropped until /estop/clear runs."""
+    if ctx.current_behavior_task and not ctx.current_behavior_task.done():
+        ctx.current_behavior_task.cancel()
+    if ctx.hardware:
+        await ctx.hardware.estop()
+    await ctx.state_machine.transition(RobotState.IDLE, reason="estop", force=True)
+    ctx.state_machine.set_behavior(None)
+    ctx.state_machine.set_error("estop latched")
+    return {"ok": True, "estopped": True}
+
+
+@app.post("/estop/clear", dependencies=[Depends(require_admin)])
+async def estop_clear() -> dict:
+    """Operator-initiated reset. Admin-only — clearing an E-stop should
+    require human acknowledgement, not be reachable from a stuck script."""
+    if ctx.hardware:
+        await ctx.hardware.clear_estop()
+    ctx.state_machine.set_error(None)
+    return {"ok": True, "estopped": False}
+
+
 @app.get("/metrics")
 async def metrics() -> Response:
     body = ctx.metrics.render(
@@ -589,27 +592,61 @@ async def command(req: CommandRequest) -> CommandResponse:
     return await _dispatch_command(req)
 
 
-async def _run_behavior(name: str) -> None:
-    # Serialize behavior swaps so a concurrent caller can't observe an
-    # intermediate state where current_tree points at a stopped tree or
-    # current_behavior is half-cleared.
-    async with ctx.behavior_lock:
-        if ctx.current_tree and ctx.current_tree.is_running:
-            await ctx.current_tree.stop()
-            # Cancelled BT may have set behavior name but skipped the exit action.
-            if ctx.state_machine.status.current_behavior is not None:
-                ctx.state_machine.set_behavior(None)
-            if ctx.state_machine.state == RobotState.EXECUTING:
+async def _play_trajectory(behavior_name: str) -> None:
+    """Background task: sample the behavior's trajectory at SENSOR_HZ and
+    push each waypoint through the HAL. Returns the state machine to
+    STANDING on normal completion. Cancellable — _run_behavior cancels the
+    in-flight task when a new behavior preempts."""
+    assert ctx.hardware is not None
+    behavior = BEHAVIORS[behavior_name]
+    traj = behavior.build()
+    period = 1.0 / SENSOR_HZ
+    started = time.monotonic()
+    try:
+        await ctx.state_machine.transition(
+            RobotState.EXECUTING, reason=f"behavior:{behavior_name}", force=True
+        )
+        ctx.state_machine.set_behavior(behavior_name)
+        while True:
+            t = time.monotonic() - started
+            targets = traj.sample(t)
+            await ctx.hardware.write(targets)
+            if t >= traj.duration:
+                break
+            await asyncio.sleep(period)
+    except asyncio.CancelledError:
+        # Preempted by a newer behavior. Caller handles state cleanup.
+        raise
+    finally:
+        ctx.state_machine.set_behavior(None)
+        if ctx.state_machine.state == RobotState.EXECUTING:
+            try:
                 await ctx.state_machine.transition(
-                    RobotState.STANDING, reason="behavior:cancelled", force=True
+                    RobotState.STANDING, reason=f"behavior:{behavior_name}:done", force=True
                 )
-        tree = BEHAVIORS[name](ctx.state_machine)
-        ctx.current_tree = tree
-        tree.start()
-        # Wait for the BT's enter Action to commit the EXECUTING transition
-        # before returning so the HTTP response carries the real new state
-        # instead of the pre-execute one. Bounded so a slow BT can't hang
-        # the route.
+            except Exception:
+                logger.exception("post-behavior transition failed")
+
+
+async def _run_behavior(name: str) -> None:
+    """Replace any running behavior with a fresh one. The HTTP route awaits
+    the EXECUTING transition before returning so the response carries the
+    real new state, but the trajectory itself plays in the background."""
+    async with ctx.behavior_lock:
+        prev = ctx.current_behavior_task
+        if prev and not prev.done():
+            prev.cancel()
+            try:
+                await prev
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("previous behavior task raised on cancel")
+        if ctx.hardware:
+            await ctx.hardware.enable()
+        task = asyncio.create_task(_play_trajectory(name))
+        ctx.current_behavior_task = task
+        # Wait briefly for the player to commit the EXECUTING transition.
         for _ in range(50):
             if (
                 ctx.state_machine.state == RobotState.EXECUTING

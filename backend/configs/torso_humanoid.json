@@ -1,0 +1,19 @@
+{
+  "name": "torso_humanoid",
+  "description": "13-DOF upper-body Dynamixel humanoid (Inmoov-style). Built from XL430 (large joints) + XL330 (wrists/head).",
+  "joints": [
+    { "name": "waist_yaw",       "hardware_id": "1",  "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 1.5 },
+    { "name": "head_yaw",        "hardware_id": "2",  "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 3.0 },
+    { "name": "head_pitch",      "hardware_id": "3",  "lower_limit_deg": -30,  "upper_limit_deg": 30,  "max_velocity": 3.0 },
+    { "name": "shoulder_left",   "hardware_id": "10", "lower_limit_deg": -180, "upper_limit_deg": 90,  "max_velocity": 2.5 },
+    { "name": "shoulder_right",  "hardware_id": "11", "lower_limit_deg": -90,  "upper_limit_deg": 180, "max_velocity": 2.5 },
+    { "name": "upperarm_left",   "hardware_id": "12", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 2.5 },
+    { "name": "upperarm_right",  "hardware_id": "13", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 2.5 },
+    { "name": "elbow_left",      "hardware_id": "14", "lower_limit_deg": 0,    "upper_limit_deg": 135, "max_velocity": 3.0 },
+    { "name": "elbow_right",     "hardware_id": "15", "lower_limit_deg": 0,    "upper_limit_deg": 135, "max_velocity": 3.0 },
+    { "name": "wrist_left",      "hardware_id": "20", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 4.0 },
+    { "name": "wrist_right",     "hardware_id": "21", "lower_limit_deg": -90,  "upper_limit_deg": 90,  "max_velocity": 4.0 },
+    { "name": "gripper_left",    "hardware_id": "22", "lower_limit_deg": 0,    "upper_limit_deg": 90,  "max_velocity": 5.0 },
+    { "name": "gripper_right",   "hardware_id": "23", "lower_limit_deg": 0,    "upper_limit_deg": 90,  "max_velocity": 5.0 }
+  ]
+}

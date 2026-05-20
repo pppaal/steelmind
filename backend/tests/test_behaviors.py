@@ -1,38 +1,33 @@
-import pytest
-
 from backend.behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
-from backend.models import RobotState
-from backend.state_machine import StateMachine
 
 
 def test_registry_keys_match_descriptions() -> None:
     assert set(BEHAVIORS.keys()) == set(BEHAVIOR_DESCRIPTIONS.keys())
-    assert "demo" in BEHAVIORS
+    assert {"demo", "wave", "squat", "patrol", "dance"} <= set(BEHAVIORS.keys())
 
 
-@pytest.mark.asyncio
-async def test_each_behavior_factory_constructs_tree() -> None:
-    sm = StateMachine()
-    for name, factory in BEHAVIORS.items():
-        tree = factory(sm)
-        assert tree.root.name == name
+def test_each_behavior_builds_a_trajectory() -> None:
+    for name, behavior in BEHAVIORS.items():
+        traj = behavior.build()
+        assert traj.duration > 0, f"{name}: duration must be positive"
+        # Sampling at t=0 always returns a dict of joint targets.
+        sample = traj.sample(0.0)
+        assert isinstance(sample, dict)
 
 
-@pytest.mark.asyncio
-async def test_demo_runs_and_ends_in_standing() -> None:
-    sm = StateMachine()
-    tree = BEHAVIORS["demo"](sm)
-    task = tree.start()
-    await task
-    assert sm.state == RobotState.STANDING
-    assert sm.status.current_behavior is None
+def test_trajectory_clamps_t_to_duration() -> None:
+    behavior = BEHAVIORS["wave"]
+    traj = behavior.build()
+    end_sample = traj.sample(traj.duration)
+    far_future = traj.sample(traj.duration + 100.0)
+    # Clamping means sampling past the end returns the final pose.
+    assert end_sample == far_future
 
 
-@pytest.mark.asyncio
-async def test_behavior_tree_wait_returns_last_status() -> None:
-    sm = StateMachine()
-    tree = BEHAVIORS["demo"](sm)
-    tree.start()
-    status = await tree.wait()
-    assert status is not None
-    assert not tree.is_running
+def test_advertised_duration_matches_trajectory() -> None:
+    for name, behavior in BEHAVIORS.items():
+        traj = behavior.build()
+        # Allow tiny floating drift from compose() sums.
+        assert abs(traj.duration - behavior.duration) < 0.01, (
+            f"{name}: declared {behavior.duration}, built {traj.duration}"
+        )
