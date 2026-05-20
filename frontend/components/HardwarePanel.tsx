@@ -24,6 +24,7 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
   const [hasChain, setHasChain] = useState(false);
   const [reachTarget, setReachTarget] = useState({ x: "0.15", y: "0.10" });
   const [fk, setFk] = useState<{ x: number; y: number } | null>(null);
+  const [routines, setRoutines] = useState<string[]>([]);
 
   const post = useCallback(
     async (path: string, body?: unknown, method = "POST") => {
@@ -68,10 +69,22 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
     }
   }, [apiBase]);
 
+  const refreshRoutines = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/routines`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = (await res.json()) as { routines: Record<string, unknown[]> };
+      setRoutines(Object.keys(data.routines));
+    } catch {
+      /* ignore */
+    }
+  }, [apiBase]);
+
   useEffect(() => {
     void refreshKeyframes();
     void refreshFk();
-  }, [refreshKeyframes, refreshFk]);
+    void refreshRoutines();
+  }, [refreshKeyframes, refreshFk, refreshRoutines]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -275,6 +288,29 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
           )}
         </div>
       </div>
+
+      {/* Routines — saved macros (created via API/tests; run from here) */}
+      {routines.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+            Routines
+          </div>
+          <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
+            {routines.map((r) => (
+              <div key={r} className="flex items-center justify-between gap-2">
+                <span className="truncate font-mono text-[11px] text-zinc-300">{r}</span>
+                <button
+                  onClick={() => run(() => post(`/routines/${encodeURIComponent(r)}/run`))}
+                  disabled={busy || estopped}
+                  className="shrink-0 rounded border border-indigo-600 px-2 py-0.5 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-600/20 disabled:opacity-40"
+                >
+                  ▶ run
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from fastapi import (
@@ -55,6 +56,7 @@ from .models import (
 from .plan_validator import validate_plan
 from .rate_limit import TokenBucket
 from .robot_config import load_chain, load_config
+from .routines import RoutineStore
 from .safety import Watchdog
 from .secrets import env_or_file
 from .state_machine import InvalidTransitionError, StateMachine
@@ -89,6 +91,7 @@ HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
 KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))
+ROUTINES_FILE = os.getenv("ROUTINES_FILE", "routines.json")
 # Largest single jog step a /jog call may request, radians. Keeps a fat-
 # fingered operator from commanding a 180° slam in one click.
 MAX_JOG_RAD = float(os.getenv("MAX_JOG_RAD", "0.35"))  # ~20 degrees
@@ -298,6 +301,8 @@ class AppContext:
         self.chain: PlanarChain | None = None
         self.calibration = Calibration(CALIBRATION_FILE)
         self.keyframes = KeyframeStore(KEYFRAMES_FILE)
+        self.routines = RoutineStore(ROUTINES_FILE)
+        self.routine_task: asyncio.Task[None] | None = None
         self.current_behavior_task: asyncio.Task[None] | None = None
         self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
@@ -310,6 +315,7 @@ class AppContext:
         await self.journal.init()
         await self.calibration.load()
         await self.keyframes.load()
+        await self.routines.load()
         self.joints = _apply_calibration(load_config(ROBOT_CONFIG), self.calibration)
         self.chain = load_chain(ROBOT_CONFIG)
         self.hardware = build_hardware(self.joints)
@@ -535,9 +541,11 @@ async def ai_reset(request: Request) -> dict:
 
 @app.post("/estop", dependencies=[Depends(require_operator)])
 async def estop() -> dict:
-    """Latching emergency stop. Cancels any active behavior, force-transitions
-    to IDLE, and cuts torque via the hardware. Subsequent writes are silently
-    dropped until /estop/clear runs."""
+    """Latching emergency stop. Cancels any active behavior/routine,
+    force-transitions to IDLE, and cuts torque via the hardware. Subsequent
+    writes are silently dropped until /estop/clear runs."""
+    if ctx.routine_task and not ctx.routine_task.done():
+        ctx.routine_task.cancel()
     if ctx.current_behavior_task and not ctx.current_behavior_task.done():
         ctx.current_behavior_task.cancel()
     if ctx.hardware:
@@ -846,6 +854,153 @@ async def reach(req: ReachRequest) -> dict:
         "residual": residual,
         "angles": angles,
     }
+
+
+# --- Routines: scripted sequences of the primitives above ---------------------
+
+
+class CommandStep(BaseModel):
+    type: Literal["command"]
+    command: str
+    params: dict = Field(default_factory=dict)
+
+
+class BehaviorStep(BaseModel):
+    type: Literal["behavior"]
+    behavior: str
+
+
+class KeyframesStep(BaseModel):
+    type: Literal["keyframes"]
+    names: list[str]
+
+
+class ReachStep(BaseModel):
+    type: Literal["reach"]
+    x: float
+    y: float
+
+
+class WaitStep(BaseModel):
+    type: Literal["wait"]
+    seconds: float
+
+
+RoutineStep = Annotated[
+    CommandStep | BehaviorStep | KeyframesStep | ReachStep | WaitStep,
+    Field(discriminator="type"),
+]
+
+
+class RoutineBody(BaseModel):
+    steps: list[RoutineStep]
+
+
+def _validate_routine_steps(steps: list[RoutineStep]) -> None:
+    """Reject steps that reference things that don't exist, so a routine
+    can't be saved that's guaranteed to fail at run time."""
+    for i, step in enumerate(steps):
+        if isinstance(step, BehaviorStep) and step.behavior not in BEHAVIORS:
+            raise HTTPException(status_code=400, detail=f"step {i}: unknown behavior {step.behavior}")
+        if isinstance(step, ReachStep) and ctx.chain is None:
+            raise HTTPException(status_code=400, detail=f"step {i}: reach needs a kinematic chain")
+        if isinstance(step, WaitStep) and step.seconds < 0:
+            raise HTTPException(status_code=400, detail=f"step {i}: wait seconds must be >= 0")
+
+
+async def _await_motion() -> None:
+    """Block until the current background motion (behavior/keyframe/reach)
+    finishes, so routine steps run strictly one after another."""
+    task = ctx.current_behavior_task
+    if task and not task.done():
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _run_routine(name: str, steps: list[RoutineStep]) -> None:
+    """Execute a routine step-by-step in the background, awaiting each
+    motion's completion. Broadcasts progress so the UI can follow along."""
+    await ctx.manager.broadcast({"type": "routine_started", "name": name, "steps": len(steps)})
+    try:
+        for i, step in enumerate(steps):
+            await ctx.manager.broadcast(
+                {"type": "routine_step", "name": name, "index": i, "step": step.type}
+            )
+            if isinstance(step, WaitStep):
+                await asyncio.sleep(step.seconds)
+            elif isinstance(step, CommandStep):
+                await _dispatch_command(CommandRequest(command=step.command, params=step.params))
+                await _await_motion()
+            elif isinstance(step, BehaviorStep):
+                await _play(step.behavior, BEHAVIORS[step.behavior].build())
+                await _await_motion()
+            elif isinstance(step, KeyframesStep):
+                assert ctx.hardware is not None
+                snap = await ctx.hardware.read()
+                start = {n: js.position for n, js in snap.joints.items()}
+                traj = ctx.keyframes.build_trajectory(
+                    step.names, segment_duration=KEYFRAME_SEGMENT_SEC, start_pose=start
+                )
+                await _play(f"keyframes:{'+'.join(step.names)}", traj)
+                await _await_motion()
+            elif isinstance(step, ReachStep):
+                assert ctx.hardware is not None and ctx.chain is not None
+                snap = await ctx.hardware.read()
+                seed = {n: js.position for n, js in snap.joints.items()}
+                limits = {j.name: (j.lower_limit, j.upper_limit) for j in ctx.joints}
+                angles, _, _ = ctx.chain.inverse((step.x, step.y), seed=seed, limits=limits)
+                traj = min_jerk(seed, {**seed, **angles}, duration=KEYFRAME_SEGMENT_SEC)
+                await _play(f"reach:({step.x:.2f},{step.y:.2f})", traj)
+                await _await_motion()
+        await ctx.manager.broadcast({"type": "routine_complete", "name": name})
+    except asyncio.CancelledError:
+        await ctx.manager.broadcast({"type": "routine_cancelled", "name": name})
+        raise
+    except Exception as e:
+        logger.exception("routine %s failed", name)
+        await ctx.manager.broadcast({"type": "routine_failed", "name": name, "detail": str(e)})
+
+
+@app.get("/routines", dependencies=[Depends(require_viewer)])
+async def list_routines() -> dict:
+    return {"routines": ctx.routines.all()}
+
+
+@app.put("/routines/{name}", dependencies=[Depends(require_operator)])
+async def save_routine(name: str, body: RoutineBody) -> dict:
+    _validate_routine_steps(body.steps)
+    await ctx.routines.save(name, [s.model_dump() for s in body.steps])
+    return {"ok": True, "name": name, "steps": len(body.steps)}
+
+
+@app.delete("/routines/{name}", dependencies=[Depends(require_operator)])
+async def delete_routine(name: str) -> dict:
+    if not await ctx.routines.delete(name):
+        raise HTTPException(status_code=404, detail=f"unknown routine: {name}")
+    return {"ok": True, "name": name}
+
+
+@app.post("/routines/{name}/run", dependencies=[Depends(require_operator)])
+async def run_routine(name: str) -> dict:
+    raw = ctx.routines.get(name)
+    if raw is None:
+        raise HTTPException(status_code=404, detail=f"unknown routine: {name}")
+    # Re-validate against the model (also coerces dict → typed steps).
+    try:
+        body = RoutineBody(steps=raw)  # type: ignore[arg-type]
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"corrupt routine: {e}") from e
+    _validate_routine_steps(body.steps)
+    # Cancel a routine already in flight before starting another.
+    if ctx.routine_task and not ctx.routine_task.done():
+        ctx.routine_task.cancel()
+    task = asyncio.create_task(_run_routine(name, body.steps))
+    ctx.routine_task = task
+    ctx.background_tasks.add(task)
+    task.add_done_callback(ctx.background_tasks.discard)
+    return {"ok": True, "name": name, "steps": len(body.steps)}
 
 
 class AICommandRequest(BaseModel):

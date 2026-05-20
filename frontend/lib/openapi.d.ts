@@ -54,9 +54,9 @@ export interface paths {
         put?: never;
         /**
          * Estop
-         * @description Latching emergency stop. Cancels any active behavior, force-transitions
-         *     to IDLE, and cuts torque via the hardware. Subsequent writes are silently
-         *     dropped until /estop/clear runs.
+         * @description Latching emergency stop. Cancels any active behavior/routine,
+         *     force-transitions to IDLE, and cuts torque via the hardware. Subsequent
+         *     writes are silently dropped until /estop/clear runs.
          */
         post: operations["estop_estop_post"];
         delete?: never;
@@ -354,6 +354,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/routines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Routines */
+        get: operations["list_routines_routines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/routines/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Routine */
+        put: operations["save_routine_routines__name__put"];
+        post?: never;
+        /** Delete Routine */
+        delete: operations["delete_routine_routines__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/routines/{name}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Routine */
+        post: operations["run_routine_routines__name__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ai-command": {
         parameters: {
             query?: never;
@@ -407,6 +459,16 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
+        /** BehaviorStep */
+        BehaviorStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "behavior";
+            /** Behavior */
+            behavior: string;
+        };
         /** CalibrationRequest */
         CalibrationRequest: {
             /** Offsets */
@@ -431,6 +493,20 @@ export interface components {
             message?: string | null;
             status: components["schemas"]["RobotStatus"];
         };
+        /** CommandStep */
+        CommandStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "command";
+            /** Command */
+            command: string;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            };
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -450,6 +526,16 @@ export interface components {
             /** Segment Duration */
             segment_duration?: number | null;
         };
+        /** KeyframesStep */
+        KeyframesStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "keyframes";
+            /** Names */
+            names: string[];
+        };
         /** ReachRequest */
         ReachRequest: {
             /** X */
@@ -458,6 +544,18 @@ export interface components {
             y: number;
             /** Duration */
             duration?: number | null;
+        };
+        /** ReachStep */
+        ReachStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "reach";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
         };
         /**
          * RobotState
@@ -479,6 +577,11 @@ export interface components {
             /** Error */
             error?: string | null;
         };
+        /** RoutineBody */
+        RoutineBody: {
+            /** Steps */
+            steps: (components["schemas"]["CommandStep"] | components["schemas"]["BehaviorStep"] | components["schemas"]["KeyframesStep"] | components["schemas"]["ReachStep"] | components["schemas"]["WaitStep"])[];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -491,6 +594,16 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** WaitStep */
+        WaitStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "wait";
+            /** Seconds */
+            seconds: number;
         };
     };
     responses: never;
@@ -1023,6 +1136,131 @@ export interface operations {
                 "application/json": components["schemas"]["ReachRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_routines_routines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    save_routine_routines__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_routine_routines__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_routine_routines__name__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

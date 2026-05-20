@@ -20,25 +20,32 @@ _KF_FD, _KF_PATH = tempfile.mkstemp(prefix="steelmind-kf-", suffix=".json")
 os.close(_KF_FD)
 os.unlink(_KF_PATH)
 os.environ.setdefault("KEYFRAMES_FILE", _KF_PATH)
+_RT_FD, _RT_PATH = tempfile.mkstemp(prefix="steelmind-rt-", suffix=".json")
+os.close(_RT_FD)
+os.unlink(_RT_PATH)
+os.environ.setdefault("ROUTINES_FILE", _RT_PATH)
 
 
 @pytest.fixture()
 def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Return a TestClient against a freshly-imported backend.main, with
-    per-test JOURNAL_DB + CALIBRATION_FILE + KEYFRAMES_FILE and a clean
-    state machine. Tests that previously shared the module-level `ctx`
-    (and so leaked state across the suite) should use this, not `client`."""
+    per-test temp files for every persisted store and a clean state
+    machine. Tests that previously shared the module-level `ctx` (and so
+    leaked state across the suite) should use this, not `client`."""
     fd, path = tempfile.mkstemp(prefix="steelmind-fresh-", suffix=".db")
     os.close(fd)
     monkeypatch.setenv("JOURNAL_DB", path)
-    cfd, cpath = tempfile.mkstemp(prefix="steelmind-fresh-cal-", suffix=".json")
-    os.close(cfd)
-    os.unlink(cpath)
-    monkeypatch.setenv("CALIBRATION_FILE", cpath)
-    kfd, kpath = tempfile.mkstemp(prefix="steelmind-fresh-kf-", suffix=".json")
-    os.close(kfd)
-    os.unlink(kpath)
-    monkeypatch.setenv("KEYFRAMES_FILE", kpath)
+    temp_paths = [path]
+    for var, prefix in (
+        ("CALIBRATION_FILE", "steelmind-fresh-cal-"),
+        ("KEYFRAMES_FILE", "steelmind-fresh-kf-"),
+        ("ROUTINES_FILE", "steelmind-fresh-rt-"),
+    ):
+        f, p = tempfile.mkstemp(prefix=prefix, suffix=".json")
+        os.close(f)
+        os.unlink(p)
+        monkeypatch.setenv(var, p)
+        temp_paths.append(p)
     # Drop the cached module so import-time globals (ctx, configure_logging
     # handlers) rebind against the new env.
     for name in list(sys.modules):
@@ -47,7 +54,7 @@ def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     main = importlib.import_module("backend.main")
     with TestClient(main.app) as client:
         yield client
-    for p in (path, cpath, kpath):
+    for p in temp_paths:
         try:
             os.unlink(p)
         except OSError:
