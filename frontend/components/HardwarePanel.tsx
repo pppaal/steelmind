@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import RoutineBuilder from "./RoutineBuilder";
 import { authHeaders } from "@/lib/api";
 
 interface Props {
@@ -25,6 +26,7 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
   const [reachTarget, setReachTarget] = useState({ x: "0.15", y: "0.10" });
   const [fk, setFk] = useState<{ x: number; y: number } | null>(null);
   const [routines, setRoutines] = useState<string[]>([]);
+  const [behaviors, setBehaviors] = useState<string[]>([]);
 
   const post = useCallback(
     async (path: string, body?: unknown, method = "POST") => {
@@ -84,7 +86,13 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
     void refreshKeyframes();
     void refreshFk();
     void refreshRoutines();
-  }, [refreshKeyframes, refreshFk, refreshRoutines]);
+    fetch(`${apiBase}/behaviors`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.behaviors) setBehaviors(d.behaviors.map((b: { name: string }) => b.name));
+      })
+      .catch(() => {});
+  }, [apiBase, refreshKeyframes, refreshFk, refreshRoutines]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -289,14 +297,14 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
         </div>
       </div>
 
-      {/* Routines — saved macros (created via API/tests; run from here) */}
-      {routines.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-            Routines
-          </div>
-          <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
-            {routines.map((r) => (
+      {/* Routines — saved macros: run existing, build new */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+          Routines
+        </div>
+        <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
+          {routines.length > 0 &&
+            routines.map((r) => (
               <div key={r} className="flex items-center justify-between gap-2">
                 <span className="truncate font-mono text-[11px] text-zinc-300">{r}</span>
                 <button
@@ -308,9 +316,14 @@ export default function HardwarePanel({ apiBase, jointNames }: Props) {
                 </button>
               </div>
             ))}
-          </div>
+          <RoutineBuilder
+            apiBase={apiBase}
+            behaviors={behaviors}
+            hasChain={hasChain}
+            onSaved={refreshRoutines}
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
