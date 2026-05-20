@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import RoutineBuilder from "./RoutineBuilder";
 import { authHeaders } from "@/lib/api";
 import type { RoutineProgress } from "@/lib/useRobotSocket";
@@ -15,7 +15,8 @@ interface KeyframesResponse {
   keyframes: Record<string, Record<string, number>>;
 }
 
-const JOG_STEP = 0.15; // rad, ~8.6° per click — under the server's MAX_JOG_RAD
+const JOG_STEP = 0.15; // rad, ~8.6° per step — under the server's MAX_JOG_RAD
+const JOG_REPEAT_MS = 150; // hold-to-jog cadence (~7 Hz)
 
 export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
   const [keyframes, setKeyframes] = useState<string[]>([]);
@@ -112,11 +113,60 @@ export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
     }
   };
 
-  const jog = (joint: string, dir: 1 | -1) =>
-    run(() => post("/jog", { joint, delta: dir * JOG_STEP }));
+  // Press-and-hold continuous jog. We bypass the busy gate (which would
+  // disable the button after the first call) and instead guard against
+  // overlapping requests with an in-flight ref, so holding the button
+  // streams jog steps at JOG_REPEAT_MS without piling up requests.
+  const holdRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jogInFlight = useRef(false);
+
+  const jogOnce = useCallback(
+    async (joint: string, dir: 1 | -1) => {
+      if (jogInFlight.current) return;
+      jogInFlight.current = true;
+      try {
+        const res = await fetch(`${apiBase}/jog`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ joint, delta: dir * JOG_STEP }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(body.detail ?? `HTTP ${res.status}`);
+        }
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        jogInFlight.current = false;
+      }
+    },
+    [apiBase],
+  );
+
+  const stopHold = useCallback(() => {
+    if (holdRef.current) {
+      clearInterval(holdRef.current);
+      holdRef.current = null;
+    }
+  }, []);
+
+  const startHold = useCallback(
+    (joint: string, dir: 1 | -1) => {
+      if (estopped) return;
+      stopHold();
+      void jogOnce(joint, dir); // immediate first step
+      holdRef.current = setInterval(() => void jogOnce(joint, dir), JOG_REPEAT_MS);
+    },
+    [estopped, jogOnce, stopHold],
+  );
+
+  // Stop any active hold when the component unmounts.
+  useEffect(() => stopHold, [stopHold]);
 
   const estop = () =>
     run(async () => {
+      stopHold(); // drop any in-progress hold before cutting torque
       await post("/estop");
       setEstopped(true);
     });
@@ -218,36 +268,40 @@ export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
         </div>
       )}
 
-      {/* Per-joint jog */}
+      {/* Per-joint jog — press and hold for continuous motion */}
       <div className="space-y-1.5">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
-          Jog ({(JOG_STEP * 57.3).toFixed(0)}° / click)
+          Jog ({(JOG_STEP * 57.3).toFixed(0)}° / step · hold to repeat)
         </div>
         <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
           {jointNames.length === 0 ? (
             <div className="text-[11px] text-zinc-600">no joints</div>
           ) : (
-            jointNames.map((j) => (
-              <div key={j} className="flex items-center justify-between gap-2">
-                <span className="truncate font-mono text-[10px] text-zinc-400">{j}</span>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => jog(j, -1)}
-                    disabled={busy || estopped}
-                    className="h-6 w-6 rounded border border-zinc-700 text-xs text-zinc-300 hover:border-sky-500 disabled:opacity-30"
-                  >
-                    −
-                  </button>
-                  <button
-                    onClick={() => jog(j, 1)}
-                    disabled={busy || estopped}
-                    className="h-6 w-6 rounded border border-zinc-700 text-xs text-zinc-300 hover:border-sky-500 disabled:opacity-30"
-                  >
-                    +
-                  </button>
+            jointNames.map((j) => {
+              const holdProps = (dir: 1 | -1) => ({
+                onPointerDown: () => startHold(j, dir),
+                onPointerUp: stopHold,
+                onPointerLeave: stopHold,
+                // Touch fallback (some browsers don't fire pointer events).
+                onTouchEnd: stopHold,
+                disabled: estopped,
+                className:
+                  "h-6 w-6 rounded border border-zinc-700 text-xs text-zinc-300 hover:border-sky-500 active:bg-sky-600/30 disabled:opacity-30",
+              });
+              return (
+                <div key={j} className="flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-[10px] text-zinc-400">{j}</span>
+                  <div className="flex shrink-0 gap-1">
+                    <button aria-label={`jog ${j} negative`} {...holdProps(-1)}>
+                      −
+                    </button>
+                    <button aria-label={`jog ${j} positive`} {...holdProps(1)}>
+                      +
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

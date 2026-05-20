@@ -18,21 +18,55 @@ describe("HardwarePanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("jogs a joint with the right payload", async () => {
+  it("jogs a joint with the right payload on press", async () => {
+    // Record on the fetch call itself (jogOnce only reads .json() on error).
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
-      mockFetch((url, init) => {
+      vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.body) calls.push({ url, body: JSON.parse(init.body as string) });
-        return { keyframes: {} };
-      }),
+        return { ok: true, json: async () => ({ keyframes: {} }) };
+      }) as unknown as typeof fetch,
     );
     render(<HardwarePanel apiBase="http://x" jointNames={["shoulder_right"]} />);
-    fireEvent.click(screen.getAllByRole("button", { name: "+" })[0]);
+    const plus = screen.getByRole("button", { name: "jog shoulder_right positive" });
+    fireEvent.pointerDown(plus);
+    fireEvent.pointerUp(plus);
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/jog"))).toBe(true));
     const jog = calls.find((c) => c.url.endsWith("/jog"))!;
     expect((jog.body as { joint: string }).joint).toBe("shoulder_right");
     expect((jog.body as { delta: number }).delta).toBeGreaterThan(0);
+  });
+
+  it("repeats jog while held and stops on release", async () => {
+    vi.useFakeTimers();
+    let jogCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/jog")) jogCount += 1;
+        return { ok: true, json: async () => ({ keyframes: {} }) };
+      }) as unknown as typeof fetch,
+    );
+    try {
+      render(<HardwarePanel apiBase="http://x" jointNames={["j1"]} />);
+      const minus = screen.getByRole("button", { name: "jog j1 negative" });
+      fireEvent.pointerDown(minus); // immediate jog
+      // Let the immediate jog's promise settle, then advance the repeat timer.
+      await vi.advanceTimersByTimeAsync(0);
+      const afterPress = jogCount;
+      expect(afterPress).toBeGreaterThanOrEqual(1);
+      await vi.advanceTimersByTimeAsync(500); // ~3 more repeats at 150ms
+      const afterHold = jogCount;
+      expect(afterHold).toBeGreaterThan(afterPress);
+      fireEvent.pointerUp(minus);
+      const atRelease = jogCount;
+      await vi.advanceTimersByTimeAsync(500);
+      // No more jogs after release.
+      expect(jogCount).toBe(atRelease);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fires estop then shows clear button", async () => {
