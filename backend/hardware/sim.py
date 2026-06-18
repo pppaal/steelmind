@@ -62,6 +62,9 @@ class PhysicsSim(RobotHardware):
         self._battery_pct = 100.0
         self._lock = asyncio.Lock()
         self._warnings: tuple[str, ...] = ()
+        # Fault injection (sim-only): external torque disturbances and jams.
+        self._disturbance: dict[str, float] = {}
+        self._jammed: set[str] = set()
 
     @property
     def joints(self) -> list[JointSpec]:
@@ -113,10 +116,18 @@ class PhysicsSim(RobotHardware):
             pos, vel = self._pos[name], self._vel[name]
             target = self._targets.get(name, 0.0)
             torque_cmd = 0.0
+            if name in self._jammed:
+                # Jammed: the joint can't move, but the motor keeps straining
+                # toward the target — effort climbs, tripping overload.
+                torque_cmd = self._kp * (target - pos)
+                self._vel[name] = 0.0
+                self._effort[name] = abs(torque_cmd)
+                continue
+            disturbance = self._disturbance.get(name, 0.0)
             for _ in range(steps):
                 torque_cmd = self._kp * (target - pos) - self._kd * vel
                 torque_grav = -self._gravity * math.sin(pos)
-                acc = (torque_cmd + torque_grav) / self._inertia
+                acc = (torque_cmd + torque_grav + disturbance) / self._inertia
                 vel += acc * h
                 pos += vel * h
                 if pos <= spec.lower_limit:
@@ -124,8 +135,9 @@ class PhysicsSim(RobotHardware):
                 elif pos >= spec.upper_limit:
                     pos, vel = spec.upper_limit, 0.0
             self._pos[name], self._vel[name] = pos, vel
-            # Effort = how hard the motor is pulling (incl. holding gravity).
-            self._effort[name] = abs(torque_cmd)
+            # Effort = how hard the motor is pulling (incl. holding gravity /
+            # any external disturbance it's fighting).
+            self._effort[name] = abs(torque_cmd - disturbance)
 
     async def read(self) -> HardwareSnapshot:
         async with self._lock:
@@ -159,3 +171,27 @@ class PhysicsSim(RobotHardware):
                 estopped=self._estopped,
                 warnings=self._warnings,
             )
+
+    # --- Fault injection (sim-only) -----------------------------------------
+    def inject_fault(self, joint: str, kind: str, value: float = 0.0) -> None:
+        """Apply a fault to a joint. `kind` is "disturbance" (an external
+        torque of `value`) or "jam" (the joint can't move). Unknown joint or
+        kind raises ValueError."""
+        if joint not in self._joints_by_name:
+            raise ValueError(f"unknown joint: {joint}")
+        if kind == "disturbance":
+            self._disturbance[joint] = value
+        elif kind == "jam":
+            self._jammed.add(joint)
+        else:
+            raise ValueError(f"unknown fault kind: {kind}")
+
+    def clear_faults(self) -> None:
+        self._disturbance.clear()
+        self._jammed.clear()
+
+    def faults(self) -> dict:
+        return {
+            "disturbance": dict(self._disturbance),
+            "jammed": sorted(self._jammed),
+        }

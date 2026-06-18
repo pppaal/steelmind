@@ -87,3 +87,10 @@ def sim_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Boot the app on the physics simulation hardware backend."""
     with boot_app(monkeypatch, ROBOT_HARDWARE="sim") as client:
         yield client
+
+
+@pytest.fixture()
+def app_booter(monkeypatch: pytest.MonkeyPatch):
+    """A factory for booting the app with arbitrary env overrides:
+    `with app_booter(ROBOT_HARDWARE="sim", ROBOT_CONFIG=...) as client: ...`."""
+    return lambda **env: boot_app(monkeypatch, **env)

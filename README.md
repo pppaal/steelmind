@@ -33,9 +33,11 @@ or LeRobot SO-100 servos.
 * **Hardware abstraction layer** (`backend/hardware/`) — one `RobotHardware`
   interface; `mock` (kinematic slewing simulator, default), `sim` (a
   physics-ish model: per-joint PD motor + inertia + gravity, so load/effort
-  and the overload reflex behave realistically without metal), `dynamixel`
-  (protocol-2 XL/XM via U2D2), and `lerobot` (SO-100). Selected by
-  `ROBOT_HARDWARE`. The rest of the stack never touches a servo directly.
+  and the overload reflex behave realistically without metal; supports
+  **fault injection** — `/sim/fault` jams a joint or applies a disturbance
+  torque to demo the overload protective stop), `dynamixel` (protocol-2 XL/XM
+  via U2D2), and `lerobot` (SO-100). Selected by `ROBOT_HARDWARE`. The rest of
+  the stack never touches a servo directly.
 * **Camera abstraction layer** (`backend/camera/`) — one `Camera` interface,
   selected by `CAMERA`: `none` (default), `mock` (live dependency-free BMP), or
   `opencv` (real USB/CSI via lazy cv2, JPEG). Served as a `/camera/snapshot`

@@ -85,6 +85,84 @@ def test_app_boots_and_jogs_on_sim_backend(sim_app: TestClient) -> None:
     assert r.status_code == 200
 
 
+def test_jam_fault_spikes_effort() -> None:
+    sim = _sim(gravity=0.0)
+    sim._enabled = True
+    sim._targets["j"] = 1.5
+    sim.inject_fault("j", "jam")
+    for _ in range(50):
+        sim._integrate(0.02)
+    # The joint can't move but the motor strains toward the target.
+    assert sim._pos["j"] == pytest.approx(0.0, abs=1e-9)
+    assert sim._effort["j"] > 1.0
+    sim.clear_faults()
+    for _ in range(300):
+        sim._integrate(0.02)
+    assert sim._pos["j"] == pytest.approx(1.5, abs=1e-2)  # recovers after clear
+
+
+def test_disturbance_fault_perturbs_joint() -> None:
+    sim = _sim(gravity=0.0)
+    sim._enabled = True
+    sim._targets["j"] = 0.0
+    sim.inject_fault("j", "disturbance", 20.0)  # constant external torque
+    for _ in range(300):
+        sim._integrate(0.02)
+    # A steady push holds the joint off zero against the motor.
+    assert abs(sim._pos["j"]) > 0.05
+    assert sim.faults()["disturbance"] == {"j": 20.0}
+
+
+def test_inject_fault_validates() -> None:
+    sim = _sim(gravity=0.0)
+    with pytest.raises(ValueError, match="unknown joint"):
+        sim.inject_fault("nope", "jam")
+    with pytest.raises(ValueError, match="unknown fault kind"):
+        sim.inject_fault("j", "explode")
+
+
+def test_sim_fault_api_round_trip(sim_app: TestClient) -> None:
+    assert sim_app.get("/sim").json()["sim"] is True
+    r = sim_app.post("/sim/fault", json={"joint": "hip_left", "kind": "jam"})
+    assert r.status_code == 200
+    assert "hip_left" in r.json()["faults"]["jammed"]
+    assert sim_app.post("/sim/fault", json={"joint": "ghost", "kind": "jam"}).status_code == 404
+    assert sim_app.post("/sim/clear-faults").json()["faults"]["jammed"] == []
+
+
+def test_sim_fault_unavailable_on_mock(fresh_app: TestClient) -> None:
+    assert fresh_app.get("/sim").json()["sim"] is False
+    assert fresh_app.post("/sim/fault", json={"joint": "hip_left", "kind": "jam"}).status_code == 400
+
+
+def test_jam_trips_overload_protective_stop_end_to_end(app_booter, tmp_path) -> None:
+    import json
+    import time
+
+    cfg = tmp_path / "armcfg.json"
+    cfg.write_text(json.dumps({
+        "name": "fault-demo",
+        "joints": [{
+            "name": "j1", "hardware_id": "1",
+            "lower_limit_deg": -180, "upper_limit_deg": 180,
+            "max_velocity": 3.0, "max_effort": 2.0,  # low → easy to trip
+        }],
+    }))
+    with app_booter(ROBOT_HARDWARE="sim", ROBOT_CONFIG=str(cfg)) as c:
+        # Jam the joint, then command it far away — the motor strains past
+        # max_effort and the overload reflex must latch a protective stop.
+        assert c.post("/sim/fault", json={"joint": "j1", "kind": "jam"}).status_code == 200
+        # delta within MAX_JOG_RAD; jammed at 0 → motor effort ≈ kp*0.3 ≫ 2.0.
+        assert c.post("/jog", json={"joint": "j1", "delta": 0.3}).status_code == 200
+        for _ in range(60):  # up to ~6 s for the sensor loop to trip
+            err = c.get("/status").json().get("error")
+            if err and "overload" in err:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("overload protective stop never fired")
+
+
 def test_gravity_zero_at_hanging_pose() -> None:
     # A joint commanded to 0 (hanging) has no gravity load → no sag, ~0 effort.
     sim = _sim(gravity=6.0)
