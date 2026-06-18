@@ -67,7 +67,14 @@ or LeRobot SO-100 servos.
 ```
 steelmind/
 ├── backend/
-│   ├── main.py            FastAPI app + all routes + trajectory player
+│   ├── main/              FastAPI app package (split by concern)
+│   │   ├── context.py     app + AppContext singleton + background loops
+│   │   ├── motion.py      command/behavior/keyframe/reach/routine/plan exec
+│   │   ├── schemas.py     request/response + routine-step models
+│   │   ├── config.py      env-derived settings + logging
+│   │   └── routes_*.py    APIRouters: health, control, motion, routines, ai, ws
+│   ├── connection_manager.py  WebSocket fan-out
+│   ├── metrics.py         Prometheus counters + AI latency histogram
 │   ├── state_machine.py   async StateMachine + transition events
 │   ├── behavior_tree.py   minimal async BT engine
 │   ├── behaviors.py       BEHAVIORS registry (trajectory factories)
