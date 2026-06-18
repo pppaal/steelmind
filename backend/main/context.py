@@ -29,6 +29,7 @@ from ..metrics import Metrics
 from ..middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from ..models import RobotState, SensorData, SensorEvent, StatusEvent, Vector3
 from ..rate_limit import TokenBucket
+from ..recorder import SessionRecorder
 from ..robot_config import load_chain, load_config, load_safety_zone
 from ..routines import RoutineStore
 from ..safety import Watchdog, overloaded_joints
@@ -119,6 +120,9 @@ class AppContext:
     def __init__(self) -> None:
         self.state_machine = StateMachine()
         self.manager = ConnectionManager()
+        # Tap the broadcast stream so a recording captures every event.
+        self.recorder = SessionRecorder()
+        self.manager.tap = self.recorder.capture
         self.ai = AICommander(api_key=ANTHROPIC_API_KEY, timeout_sec=AI_TIMEOUT_SEC)
         # Marks the app as ready (lifespan started) vs alive (process up).
         # Liveness flips False on shutdown so /readyz returns 503 and load

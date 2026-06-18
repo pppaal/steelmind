@@ -42,6 +42,10 @@ or LeRobot SO-100 servos.
   the current frame (PNG) to the Claude request so it can ground a command in
   what the robot sees; the console exposes a 👁 vision toggle when a camera is
   present. Degrades gracefully to text-only if capture fails.
+* **Session recording** (`backend/recorder.py`) — taps the broadcast stream
+  into a timestamped event timeline (sensor frames skipped). Start/stop and
+  download as JSON from the console for audit / time-travel debugging via
+  `/recording/start|stop` and `/recording/export`.
 * **Trajectory engine** (`backend/trajectory.py`) — `hold / linear /
   min_jerk / sinusoid / compose`. Behaviors, keyframe replay, IK reach, and
   routines all play through one trajectory player at `SENSOR_HZ`.
@@ -125,6 +129,7 @@ steelmind/
 │   ├── camera/            Camera ABC + mock (synthetic BMP) + factory
 │   ├── zones.py           Cartesian safety zones / virtual walls
 │   ├── preview.py         trajectory dry-run simulation
+│   ├── recorder.py        session event-timeline recorder
 │   ├── robot_config.py    JSON/YAML joint + chain loader
 │   ├── configs/           sim_humanoid · torso_humanoid · so100_arm
 │   ├── calibration.py     per-joint offset persistence

@@ -51,6 +51,7 @@ from .routes_camera import router as _camera_router
 from .routes_control import router as _control_router
 from .routes_health import router as _health_router
 from .routes_motion import router as _motion_router
+from .routes_recording import router as _recording_router
 from .routes_routines import router as _routines_router
 from .routes_ws import router as _ws_router
 from .schemas import (
@@ -81,6 +82,7 @@ for _router in (
     _routines_router,
     _ai_router,
     _camera_router,
+    _recording_router,
     _ws_router,
 ):
     app.include_router(_router)
