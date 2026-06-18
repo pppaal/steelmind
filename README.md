@@ -66,6 +66,12 @@ or LeRobot SO-100 servos.
   to enable* control (which streams `{type:deadman}` over `/ws`), and an
   in-flight motion is frozen if the hold lapses for `DEADMAN_TIMEOUT_SEC`.
   Off by default so the simulator and scripted callers are unaffected.
+* **Virtual walls** (`backend/zones.py`) — an optional `safety_zone` config
+  block defines Cartesian keep-in bounds, a min-radius body keep-out, and
+  keep-out rectangles for the end-effector. `/reach` and `/keyframes/play`
+  sample the tip path and reject (422) any motion that would cross a wall;
+  dry-run flags it, `/workspace` exposes the zone, and the console
+  pre-validates reach targets against it. Inert unless a config declares one.
 
 ## Control modes
 

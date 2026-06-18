@@ -19,6 +19,31 @@ interface KeyframesResponse {
   keyframes: Record<string, Record<string, number>>;
 }
 
+interface Zone {
+  min_x: number | null;
+  max_x: number | null;
+  min_y: number | null;
+  max_y: number | null;
+  min_radius: number | null;
+  keepout: number[][];
+  base: [number, number];
+}
+
+// Mirror of SafetyZone.violation() for instant client-side feedback; the
+// server stays the authority and re-checks the whole path on execute.
+function zoneViolation(z: Zone, x: number, y: number): string | null {
+  if (z.min_x !== null && x < z.min_x) return "outside safe zone";
+  if (z.max_x !== null && x > z.max_x) return "outside safe zone";
+  if (z.min_y !== null && y < z.min_y) return "outside safe zone";
+  if (z.max_y !== null && y > z.max_y) return "outside safe zone";
+  if (z.min_radius !== null && Math.hypot(x - z.base[0], y - z.base[1]) < z.min_radius)
+    return "inside keep-out radius";
+  for (const [x0, y0, x1, y1] of z.keepout) {
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return "inside keep-out zone";
+  }
+  return null;
+}
+
 const JOG_STEP = 0.15; // rad, ~8.6° per step — under the server's MAX_JOG_RAD
 const JOG_REPEAT_MS = 150; // hold-to-jog cadence (~7 Hz)
 
@@ -41,6 +66,7 @@ export default function HardwarePanel({
     base: [number, number];
     inner_radius: number;
     outer_radius: number;
+    zone?: Zone;
   } | null>(null);
   const [reachPreview, setReachPreview] = useState<{
     reached: boolean;
@@ -107,7 +133,12 @@ export default function HardwarePanel({
         typeof d.inner_radius === "number" &&
         typeof d.outer_radius === "number"
       ) {
-        setWorkspace({ base: [d.base[0], d.base[1]], inner_radius: d.inner_radius, outer_radius: d.outer_radius });
+        setWorkspace({
+          base: [d.base[0], d.base[1]],
+          inner_radius: d.inner_radius,
+          outer_radius: d.outer_radius,
+          zone: d.zone ?? undefined,
+        });
       }
     } catch {
       setWorkspace(null);
@@ -323,6 +354,10 @@ export default function HardwarePanel({
     const eps = 1e-6;
     if (d > workspace.outer_radius + eps) return { ok: false, msg: "beyond reach" };
     if (d < workspace.inner_radius - eps) return { ok: false, msg: "too close to base" };
+    if (workspace.zone) {
+      const wall = zoneViolation(workspace.zone, x, y);
+      if (wall) return { ok: false, msg: wall };
+    }
     return { ok: true, msg: "" };
   })();
 

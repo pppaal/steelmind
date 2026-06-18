@@ -13,6 +13,7 @@ import math
 from .hardware.base import JointSpec
 from .kinematics import PlanarChain
 from .trajectory import Trajectory
+from .zones import SafetyZone
 
 
 def simulate_trajectory(
@@ -21,6 +22,7 @@ def simulate_trajectory(
     *,
     hz: float,
     chain: PlanarChain | None = None,
+    zone: SafetyZone | None = None,
 ) -> dict:
     """Return a preview dict: per-joint range + clamp/rate-limit flags, a list
     of human-readable violations, an `ok` flag (true when nothing would be
@@ -90,4 +92,38 @@ def simulate_trajectory(
         sx, sy = chain.forward(traj.sample(0.0))
         ex, ey = chain.forward(traj.sample(traj.duration))
         result["path"] = {"start": [sx, sy], "end": [ex, ey]}
+        if zone is not None:
+            # Sample the tip along the whole path — a min-jerk move can bow
+            # outside a wall even when both endpoints are safe.
+            wall: str | None = None
+            for t in times:
+                tx, ty = chain.forward(traj.sample(t))
+                wall = zone.violation(tx, ty)
+                if wall:
+                    break
+            if wall:
+                violations.append({"joint": "", "kind": "wall", "detail": wall})
+                result["ok"] = False
     return result
+
+
+def trajectory_zone_violation(
+    traj: Trajectory,
+    chain: PlanarChain,
+    zone: SafetyZone,
+    *,
+    hz: float,
+) -> str | None:
+    """First Cartesian safety-zone violation along the tip path, or None.
+
+    Used to block execution: a motion whose end-effector would cross a virtual
+    wall is rejected before it runs."""
+    period = 1.0 / hz
+    n = max(2, math.ceil(traj.duration * hz) + 1)
+    for i in range(n):
+        t = min(traj.duration, i * period)
+        x, y = chain.forward(traj.sample(t))
+        reason = zone.violation(x, y)
+        if reason:
+            return reason
+    return None

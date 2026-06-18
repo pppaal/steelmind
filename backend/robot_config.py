@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .hardware.base import JointSpec
 from .kinematics import PlanarChain, chain_from_config
+from .zones import SafetyZone, zone_from_config
 
 
 def _maybe_yaml_load(text: str) -> dict:
@@ -35,6 +36,11 @@ def _read_config(path: str | Path) -> dict:
 def load_chain(path: str | Path) -> PlanarChain | None:
     """Return the optional planar kinematic chain from a config, or None."""
     return chain_from_config(_read_config(path))
+
+
+def load_safety_zone(path: str | Path) -> SafetyZone | None:
+    """Return the optional Cartesian safety zone from a config, or None."""
+    return zone_from_config(_read_config(path))
 
 
 def load_config(path: str | Path) -> list[JointSpec]:
