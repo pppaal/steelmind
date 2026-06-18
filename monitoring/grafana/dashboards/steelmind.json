@@ -1,0 +1,99 @@
+{
+  "title": "steelmind",
+  "uid": "steelmind",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Robot state",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "steelmind_robot_state", "legendFormat": "{{state}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Safety: e-stop / recording / replaying",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "steelmind_estopped", "legendFormat": "e-stop", "refId": "A" },
+        { "expr": "steelmind_recording", "legendFormat": "recording", "refId": "B" },
+        { "expr": "steelmind_replaying", "legendFormat": "replaying", "refId": "C" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "WebSocket clients",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "targets": [{ "expr": "steelmind_ws_clients", "refId": "A" }]
+    },
+    {
+      "id": 4,
+      "title": "AI command / error rate (1m)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "rate(steelmind_ai_commands_total[1m])", "legendFormat": "commands/s", "refId": "A" },
+        { "expr": "rate(steelmind_ai_errors_total[1m])", "legendFormat": "errors/s", "refId": "B" },
+        { "expr": "rate(steelmind_rate_limited_total[1m])", "legendFormat": "rate-limited/s", "refId": "C" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "AI translate latency p95 (ms)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(steelmind_ai_latency_ms_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Safety stops (total)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "steelmind_overload_stops_total", "legendFormat": "overload", "refId": "A" },
+        { "expr": "steelmind_deadman_stops_total", "legendFormat": "deadman", "refId": "B" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Sensor frames / transitions (1m)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "rate(steelmind_sensor_frames_total[1m])", "legendFormat": "sensor/s", "refId": "A" },
+        { "expr": "rate(steelmind_transitions_total[1m])", "legendFormat": "transitions/s", "refId": "B" }
+      ]
+    }
+  ]
+}
