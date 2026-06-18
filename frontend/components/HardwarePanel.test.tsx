@@ -86,6 +86,52 @@ describe("HardwarePanel", () => {
     );
   });
 
+  it("reflects a server-side e-stop and recovers when it clears", async () => {
+    vi.stubGlobal("fetch", mockFetch(() => ({ keyframes: {} })));
+    const { rerender } = render(
+      <HardwarePanel apiBase="http://x" jointNames={[]} serverEstopped={false} />,
+    );
+    // Starts live: the big red E-STOP button is shown.
+    expect(screen.getByRole("button", { name: /E-STOP/ })).toBeInTheDocument();
+    // Server latches an e-stop (watchdog / another operator) — panel must follow.
+    rerender(<HardwarePanel apiBase="http://x" jointNames={[]} serverEstopped={true} />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Clear E-Stop/ })).toBeInTheDocument(),
+    );
+    // Server clears it — panel returns to live.
+    rerender(<HardwarePanel apiBase="http://x" jointNames={[]} serverEstopped={false} />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /E-STOP/ })).toBeInTheDocument(),
+    );
+  });
+
+  it("stops an active jog hold when a server e-stop latches", async () => {
+    vi.useFakeTimers();
+    let jogCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/jog")) jogCount += 1;
+        return { ok: true, json: async () => ({ keyframes: {} }) };
+      }) as unknown as typeof fetch,
+    );
+    try {
+      const { rerender } = render(
+        <HardwarePanel apiBase="http://x" jointNames={["j1"]} serverEstopped={false} />,
+      );
+      fireEvent.pointerDown(screen.getByRole("button", { name: "jog j1 positive" }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(jogCount).toBeGreaterThan(0);
+      // Server e-stop arrives mid-hold: the repeat interval must be cancelled.
+      rerender(<HardwarePanel apiBase="http://x" jointNames={["j1"]} serverEstopped={true} />);
+      const atEstop = jogCount;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(jogCount).toBe(atEstop);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records a keyframe", async () => {
     const hit: string[] = [];
     vi.stubGlobal(

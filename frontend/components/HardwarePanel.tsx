@@ -9,6 +9,10 @@ interface Props {
   apiBase: string;
   jointNames: string[];
   routine?: RoutineProgress | null;
+  // Server-side latched e-stop, derived from the live status stream. Lets the
+  // panel reflect (and react to) an e-stop triggered from anywhere — another
+  // operator, the watchdog, a script — not just this client's button.
+  serverEstopped?: boolean;
 }
 
 interface KeyframesResponse {
@@ -18,7 +22,12 @@ interface KeyframesResponse {
 const JOG_STEP = 0.15; // rad, ~8.6° per step — under the server's MAX_JOG_RAD
 const JOG_REPEAT_MS = 150; // hold-to-jog cadence (~7 Hz)
 
-export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
+export default function HardwarePanel({
+  apiBase,
+  jointNames,
+  routine,
+  serverEstopped = false,
+}: Props) {
   const [keyframes, setKeyframes] = useState<string[]>([]);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -163,6 +172,19 @@ export default function HardwarePanel({ apiBase, jointNames, routine }: Props) {
 
   // Stop any active hold when the component unmounts.
   useEffect(() => stopHold, [stopHold]);
+
+  // Reconcile with server-side e-stop. If an e-stop latches anywhere (watchdog,
+  // another operator, a script) we must reflect it locally AND immediately drop
+  // any in-progress jog hold — otherwise the interval keeps streaming jog steps
+  // the server will reject, and the UI lies about the robot being live.
+  useEffect(() => {
+    if (serverEstopped) {
+      stopHold();
+      setEstopped(true);
+    } else {
+      setEstopped(false);
+    }
+  }, [serverEstopped, stopHold]);
 
   const estop = () =>
     run(async () => {
