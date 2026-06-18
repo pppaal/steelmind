@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..ai_commander import AICommander
 from ..calibration import Calibration
+from ..camera import Camera, build_camera
 from ..connection_manager import ConnectionManager
 from ..hardware import RobotHardware, build_hardware
 from ..hardware.base import JointSpec
@@ -140,6 +141,7 @@ class AppContext:
         self.joints: list[JointSpec] = []
         self.chain: PlanarChain | None = None
         self.safety_zone: SafetyZone | None = None
+        self.camera: Camera | None = None
         self.calibration = Calibration(CALIBRATION_FILE)
         self.keyframes = KeyframeStore(KEYFRAMES_FILE)
         self.routines = RoutineStore(ROUTINES_FILE)
@@ -166,6 +168,9 @@ class AppContext:
         self.safety_zone = load_safety_zone(ROBOT_CONFIG)
         self.hardware = build_hardware(self.joints)
         await self.hardware.init()
+        self.camera = build_camera()
+        if self.camera is not None:
+            await self.camera.init()
         # The watchdog fires HAL.estop() if the sensor loop stops feeding
         # it — covers a hung asyncio loop, a deadlocked bus thread, or a
         # crashed pytest fixture leaking past lifespan.
@@ -212,6 +217,8 @@ class AppContext:
             await self.watchdog.stop()
         if self.hardware:
             await self.hardware.close()
+        if self.camera is not None:
+            await self.camera.close()
         if self.journal:
             await self.journal.close()
 

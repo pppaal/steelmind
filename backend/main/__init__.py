@@ -47,6 +47,7 @@ from .motion import (
     _validate_routine_steps,
 )
 from .routes_ai import router as _ai_router
+from .routes_camera import router as _camera_router
 from .routes_control import router as _control_router
 from .routes_health import router as _health_router
 from .routes_motion import router as _motion_router
@@ -79,6 +80,7 @@ for _router in (
     _motion_router,
     _routines_router,
     _ai_router,
+    _camera_router,
     _ws_router,
 ):
     app.include_router(_router)
