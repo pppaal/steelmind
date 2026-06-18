@@ -42,6 +42,11 @@ export default function HardwarePanel({
     inner_radius: number;
     outer_radius: number;
   } | null>(null);
+  const [reachPreview, setReachPreview] = useState<{
+    reached: boolean;
+    end: [number, number] | null;
+    violations: { kind: string; detail: string }[];
+  } | null>(null);
   const [routines, setRoutines] = useState<string[]>([]);
   const [behaviors, setBehaviors] = useState<string[]>([]);
   const [aiEnabled, setAiEnabled] = useState(false);
@@ -281,9 +286,29 @@ export default function HardwarePanel({
       const x = parseFloat(reachTarget.x);
       const y = parseFloat(reachTarget.y);
       if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("x/y must be numbers");
+      setReachPreview(null);
       const res = (await post("/reach", { x, y })) as { reached: boolean };
       if (!res.reached) setError("target out of reach — moved to closest pose");
       setTimeout(() => void refreshFk(), 600);
+    });
+
+  // Dry-run: ask the server to simulate the reach without moving, so the
+  // operator can see whether the target is reachable and whether the move
+  // would be clamped/rate-limited before committing the robot.
+  const previewReach = () =>
+    run(async () => {
+      const x = parseFloat(reachTarget.x);
+      const y = parseFloat(reachTarget.y);
+      if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("x/y must be numbers");
+      const res = (await post("/reach", { x, y, dry_run: true })) as {
+        reached: boolean;
+        preview: { violations: { kind: string; detail: string }[]; path?: { end: [number, number] } };
+      };
+      setReachPreview({
+        reached: res.reached,
+        end: res.preview.path?.end ?? null,
+        violations: res.preview.violations ?? [],
+      });
     });
 
   // Client-side reach pre-check against the cached workspace annulus. A fast
@@ -400,15 +425,37 @@ export default function HardwarePanel({
                 className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-sky-500"
               />
               <button
+                onClick={previewReach}
+                disabled={busy}
+                className="ml-auto rounded border border-zinc-600 px-2 py-1 text-[11px] font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+              >
+                Preview
+              </button>
+              <button
                 onClick={doReach}
                 disabled={busy || estopped || reachCheck?.ok === false}
-                className="ml-auto rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
               >
                 Reach
               </button>
             </div>
             {reachCheck?.ok === false && (
               <div className="text-[10px] text-amber-400">target {reachCheck.msg}</div>
+            )}
+            {reachPreview && (
+              <div className="space-y-0.5 rounded border border-zinc-700 bg-zinc-950/60 p-1.5 text-[10px]">
+                <div className={reachPreview.reached ? "text-emerald-400" : "text-amber-400"}>
+                  dry run: {reachPreview.reached ? "reachable" : "not reachable (closest pose)"}
+                  {reachPreview.end
+                    ? ` → (${reachPreview.end[0].toFixed(3)}, ${reachPreview.end[1].toFixed(3)})`
+                    : ""}
+                </div>
+                {reachPreview.violations.map((v, i) => (
+                  <div key={i} className="text-zinc-500">
+                    · {v.detail}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

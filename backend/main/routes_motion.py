@@ -5,8 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_operator, require_viewer
+from ..preview import simulate_trajectory
 from ..trajectory import min_jerk
-from .config import KEYFRAME_SEGMENT_SEC
+from .config import KEYFRAME_SEGMENT_SEC, SENSOR_HZ
 from .context import _validate_name, ctx
 from .motion import _play
 from .schemas import KeyframePlayRequest, ReachRequest
@@ -33,6 +34,9 @@ async def play_keyframes(req: KeyframePlayRequest) -> dict:
         traj = ctx.keyframes.build_trajectory(req.names, segment_duration=seg, start_pose=start)
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if req.dry_run:
+        specs = {j.name: j for j in ctx.joints}
+        return {"dry_run": True, "names": req.names, "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ)}
     await _play(f"keyframes:{'+'.join(req.names)}", traj)
     return {"ok": True, "names": req.names, "duration": traj.duration}
 
@@ -101,6 +105,15 @@ async def reach(req: ReachRequest) -> dict:
     # Build a min-jerk move from the current pose into the IK solution.
     seg = req.duration or KEYFRAME_SEGMENT_SEC
     traj = min_jerk(seed, {**seed, **angles}, duration=seg)
+    if req.dry_run:
+        specs = {j.name: j for j in ctx.joints}
+        return {
+            "dry_run": True,
+            "reached": reached,
+            "residual": residual,
+            "angles": angles,
+            "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain),
+        }
     await _play(f"reach:({req.x:.2f},{req.y:.2f})", traj)
     return {
         "ok": True,

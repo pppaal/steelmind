@@ -21,12 +21,14 @@ class CalibrationRequest(BaseModel):
 class KeyframePlayRequest(BaseModel):
     names: list[str]
     segment_duration: float | None = None
+    dry_run: bool = False
 
 
 class ReachRequest(BaseModel):
     x: float
     y: float
     duration: float | None = None
+    dry_run: bool = False
 
 
 # --- Routines: scripted sequences of the primitives above ---------------------
