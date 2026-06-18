@@ -19,7 +19,11 @@ export default function Sparkline({
   domain,
   zeroLine = false,
 }: Props) {
-  if (data.length < 2) {
+  // Drop non-finite samples (NaN/Infinity from a dropped telemetry frame):
+  // a single bad value would otherwise poison Math.min/max and render an
+  // empty/broken chart.
+  const clean = data.filter(Number.isFinite);
+  if (clean.length < 2) {
     return (
       <svg width={width} height={height} className="block">
         <line
@@ -34,13 +38,13 @@ export default function Sparkline({
     );
   }
 
-  const lo = domain ? domain[0] : Math.min(...data);
-  const hi = domain ? domain[1] : Math.max(...data);
+  const lo = domain ? domain[0] : Math.min(...clean);
+  const hi = domain ? domain[1] : Math.max(...clean);
   const span = hi - lo || 1;
-  const stepX = width / (data.length - 1);
+  const stepX = width / (clean.length - 1);
   const toY = (v: number) => height - ((v - lo) / span) * (height - 4) - 2;
 
-  const points = data.map((v, i) => `${i * stepX},${toY(v)}`).join(" ");
+  const points = clean.map((v, i) => `${i * stepX},${toY(v)}`).join(" ");
   const area = `0,${height} ${points} ${width},${height}`;
   const yZero = zeroLine ? toY(0) : null;
 

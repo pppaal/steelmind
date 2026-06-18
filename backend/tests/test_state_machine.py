@@ -69,9 +69,9 @@ async def test_invalid_walking_to_idle_direct() -> None:
 @pytest.mark.asyncio
 async def test_set_behavior_and_error() -> None:
     sm = StateMachine()
-    sm.set_behavior("wave")
+    await sm.set_behavior("wave")
     assert sm.status.current_behavior == "wave"
-    sm.set_error("imu fault")
+    await sm.set_error("imu fault")
     assert sm.status.error == "imu fault"
-    sm.set_behavior(None)
+    await sm.set_behavior(None)
     assert sm.status.current_behavior is None

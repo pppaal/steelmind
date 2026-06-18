@@ -95,6 +95,11 @@ ROUTINES_FILE = os.getenv("ROUTINES_FILE", "routines.json")
 # Largest single jog step a /jog call may request, radians. Keeps a fat-
 # fingered operator from commanding a 180° slam in one click.
 MAX_JOG_RAD = float(os.getenv("MAX_JOG_RAD", "0.35"))  # ~20 degrees
+# When deployed behind a reverse proxy / load balancer the TCP source IP is
+# the proxy's, so per-client rate limiting collapses to a single bucket. Set
+# TRUST_PROXY_HEADERS=1 *only* when a trusted proxy sets X-Forwarded-For;
+# otherwise leave it off so clients can't spoof the header to dodge limits.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "0").lower() in ("1", "true", "yes")
 
 
 import dataclasses  # noqa: E402 - grouped with the helper that uses it
@@ -489,11 +494,27 @@ app.add_middleware(
 )
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for rate limiting / session fallback.
+
+    Honours X-Forwarded-For only when TRUST_PROXY_HEADERS is set, taking the
+    left-most (original client) entry. Without that flag the header is
+    attacker-controlled, so we fall back to the raw socket peer.
+    """
+    if TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
+    return request.client.host if request.client else "unknown"
+
+
 def _session_key(request: Request) -> str:
     sid = request.headers.get("x-session-id")
     if sid:
         return sid[:64]  # opaque; clamp length to prevent memory abuse
-    return request.client.host if request.client else "default"
+    return _client_ip(request)
 
 
 @app.get("/health")
@@ -551,8 +572,8 @@ async def estop() -> dict:
     if ctx.hardware:
         await ctx.hardware.estop()
     await ctx.state_machine.transition(RobotState.IDLE, reason="estop", force=True)
-    ctx.state_machine.set_behavior(None)
-    ctx.state_machine.set_error("estop latched")
+    await ctx.state_machine.set_behavior(None)
+    await ctx.state_machine.set_error("estop latched")
     return {"ok": True, "estopped": True}
 
 
@@ -618,7 +639,7 @@ async def estop_clear() -> dict:
     require human acknowledgement, not be reachable from a stuck script."""
     if ctx.hardware:
         await ctx.hardware.clear_estop()
-    ctx.state_machine.set_error(None)
+    await ctx.state_machine.set_error(None)
     return {"ok": True, "estopped": False}
 
 
@@ -701,7 +722,7 @@ async def _play_trajectory(label: str, traj: Trajectory) -> None:
         await ctx.state_machine.transition(
             RobotState.EXECUTING, reason=f"play:{label}", force=True
         )
-        ctx.state_machine.set_behavior(label)
+        await ctx.state_machine.set_behavior(label)
         while True:
             t = time.monotonic() - started
             await ctx.hardware.write(traj.sample(t))
@@ -711,7 +732,7 @@ async def _play_trajectory(label: str, traj: Trajectory) -> None:
     except asyncio.CancelledError:
         raise
     finally:
-        ctx.state_machine.set_behavior(None)
+        await ctx.state_machine.set_behavior(None)
         if ctx.state_machine.state == RobotState.EXECUTING:
             try:
                 await ctx.state_machine.transition(
@@ -1029,7 +1050,7 @@ async def ai_routine(req: AIRoutineRequest, request: Request) -> dict:
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
-    allowed, retry_after = await ctx.ai_rate.allow(request.client.host if request.client else "?")
+    allowed, retry_after = await ctx.ai_rate.allow(_client_ip(request))
     if not allowed:
         ctx.metrics.rate_limited_total += 1
         raise HTTPException(status_code=429, detail=f"rate limited; retry in {retry_after:.1f}s")
@@ -1122,7 +1143,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
 
-    client_key = request.client.host if request.client else "unknown"
+    client_key = _client_ip(request)
     allowed, retry_after = await ctx.ai_rate.allow(client_key)
     if not allowed:
         ctx.metrics.rate_limited_total += 1

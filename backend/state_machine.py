@@ -65,11 +65,13 @@ class StateMachine:
         await self._broadcast(event)
         return event
 
-    def set_behavior(self, name: str | None) -> None:
-        self._status = self._status.model_copy(update={"current_behavior": name})
+    async def set_behavior(self, name: str | None) -> None:
+        async with self._lock:
+            self._status = self._status.model_copy(update={"current_behavior": name})
 
-    def set_error(self, error: str | None) -> None:
-        self._status = self._status.model_copy(update={"error": error})
+    async def set_error(self, error: str | None) -> None:
+        async with self._lock:
+            self._status = self._status.model_copy(update={"error": error})
 
     async def _broadcast(self, event: StateTransitionEvent) -> None:
         for queue in list(self._listeners):

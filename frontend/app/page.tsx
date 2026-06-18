@@ -58,7 +58,12 @@ export default function Page() {
           <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
           <EventLog entries={log} />
         </div>
-        <HardwarePanel apiBase={apiBase} jointNames={jointNames} routine={routine} />
+        <HardwarePanel
+          apiBase={apiBase}
+          jointNames={jointNames}
+          routine={routine}
+          serverEstopped={status?.error === "estop latched"}
+        />
         <TelemetryPanel
           connection={connection}
           status={status}
