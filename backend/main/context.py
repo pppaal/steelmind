@@ -151,6 +151,7 @@ class AppContext:
         self.routines = RoutineStore(ROUTINES_FILE)
         self.routine_task: asyncio.Task[None] | None = None
         self.current_behavior_task: asyncio.Task[None] | None = None
+        self.replay_task: asyncio.Task[None] | None = None
         # Per-joint consecutive-overload frame counters for protective stop.
         self._overload_counts: dict[str, int] = {}
         # Deadman: monotonic deadline; motion is permitted while now < this.
@@ -368,6 +369,42 @@ class AppContext:
         logger.warning("deadman released — freezing motion")
         self.metrics.deadman_stops_total += 1
         self._cancel_motion_tasks()
+
+    # --- Session replay -----------------------------------------------------
+    @property
+    def replaying(self) -> bool:
+        return bool(self.replay_task and not self.replay_task.done())
+
+    def start_replay(self, events: list[dict], speed: float) -> None:
+        """(Re)start a background replay of a recorded event timeline."""
+        if self.replay_task and not self.replay_task.done():
+            self.replay_task.cancel()
+        self.replay_task = asyncio.create_task(self._run_replay(events, speed))
+        self.background_tasks.add(self.replay_task)
+        self.replay_task.add_done_callback(self.background_tasks.discard)
+
+    def stop_replay(self) -> None:
+        if self.replay_task and not self.replay_task.done():
+            self.replay_task.cancel()
+
+    async def _run_replay(self, events: list[dict], speed: float) -> None:
+        """Re-broadcast a recorded timeline, preserving inter-event timing
+        (scaled by `speed`, gaps capped). Each frame is tagged replay=True so
+        clients can distinguish it and the recorder won't re-capture it."""
+        await self.manager.broadcast({"type": "replay_started", "count": len(events)})
+        try:
+            prev_t = 0.0
+            for item in events:
+                t = float(item.get("t", 0.0))
+                gap = max(0.0, t - prev_t) / max(0.1, speed)
+                if gap:
+                    await asyncio.sleep(min(gap, 5.0))
+                prev_t = t
+                await self.manager.broadcast({**(item.get("event") or {}), "replay": True})
+            await self.manager.broadcast({"type": "replay_complete"})
+        except asyncio.CancelledError:
+            await self.manager.broadcast({"type": "replay_cancelled"})
+            raise
 
     async def _transition_loop(self) -> None:
         queue = self.state_machine.subscribe()

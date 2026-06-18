@@ -34,6 +34,28 @@ describe("RecordingPanel", () => {
     await waitFor(() => expect(posts.some((u) => u.endsWith("/recording/stop"))).toBe(true));
   });
 
+  it("starts a replay via the API", async () => {
+    let replaying = false;
+    const posts: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posts.push(url);
+          replaying = url.endsWith("/recording/replay");
+          return { ok: true, json: async () => ({ replaying }) };
+        }
+        return { ok: true, json: async () => ({ active: false, count: 3, replaying }) };
+      }) as unknown as typeof fetch,
+    );
+    render(<RecordingPanel apiBase="http://x" />);
+    const replay = await screen.findByRole("button", { name: /replay/i });
+    await waitFor(() => expect(replay).not.toBeDisabled()); // count>0, not recording
+    fireEvent.click(replay);
+    await waitFor(() => expect(posts.some((u) => u.endsWith("/recording/replay"))).toBe(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument());
+  });
+
   it("downloads the exported timeline", async () => {
     URL.createObjectURL = vi.fn(() => "blob:fake");
     URL.revokeObjectURL = vi.fn();

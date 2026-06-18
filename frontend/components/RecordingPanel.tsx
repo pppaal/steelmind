@@ -12,6 +12,7 @@ interface Props {
 export default function RecordingPanel({ apiBase }: Props) {
   const [active, setActive] = useState(false);
   const [count, setCount] = useState(0);
+  const [replaying, setReplaying] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -21,6 +22,7 @@ export default function RecordingPanel({ apiBase }: Props) {
       const d = await r.json();
       setActive(Boolean(d.active));
       setCount(Number(d.count ?? 0));
+      setReplaying(Boolean(d.replaying));
     } catch {
       /* ignore */
     }
@@ -42,6 +44,19 @@ export default function RecordingPanel({ apiBase }: Props) {
         setActive(Boolean(d.active));
         setCount(Number(d.count ?? 0));
       }
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleReplay = async () => {
+    setBusy(true);
+    try {
+      const path = replaying ? "/recording/replay/stop" : "/recording/replay";
+      const r = await fetch(`${apiBase}${path}`, { method: "POST", headers: authHeaders() });
+      if (r.ok) setReplaying(Boolean((await r.json()).replaying));
     } catch {
       /* ignore */
     } finally {
@@ -79,6 +94,18 @@ export default function RecordingPanel({ apiBase }: Props) {
         {active ? "Recording" : "Record"}
       </button>
       <span className="font-mono text-[10px] text-zinc-500">{count}</span>
+      <button
+        type="button"
+        onClick={() => void toggleReplay()}
+        disabled={busy || active || (count === 0 && !replaying)}
+        className={`rounded border px-2 py-1 text-[10px] uppercase tracking-wider transition disabled:opacity-40 ${
+          replaying
+            ? "border-sky-500 bg-sky-600/20 text-sky-300"
+            : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+        }`}
+      >
+        {replaying ? "■ Stop" : "▶ Replay"}
+      </button>
       <button
         type="button"
         onClick={() => void download()}

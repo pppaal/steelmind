@@ -49,6 +49,8 @@ class SessionRecorder:
             data = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else dict(payload)
         except Exception:
             return
+        if data.get("replay") or str(data.get("type", "")).startswith("replay"):
+            return  # don't record frames produced by a replay (no feedback loop)
         if data.get("type") in self._skip:
             return
         if len(self._events) >= self._max:
