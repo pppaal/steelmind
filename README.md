@@ -309,6 +309,10 @@ When no `API_TOKEN*` is set, auth is bypassed (single-user dev/demo). A bare
   backend replicas share event history.
 * **OpenTelemetry**: `pip install -r requirements-otel.txt`, set
   `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`.
+* **Prometheus + Grafana**: `docker compose --profile monitoring up` scrapes
+  `/metrics` and serves a pre-provisioned dashboard at `localhost:3001`
+  (state, e-stop/recording/replaying, AI latency p95, command/error rates,
+  safety stops). Config lives in `monitoring/`.
 * **Load testing**: `make loadtest` (`k6 run loadtest/k6.js`).
 
 ## Hardware bring-up

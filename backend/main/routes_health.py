@@ -54,6 +54,10 @@ async def metrics() -> Response:
         ws_clients=ctx.manager.count,
         ai_history=ctx.ai.history_length(),
         ai_sessions=ctx.ai.session_count,
+        state=ctx.state_machine.state.value,
+        estopped=bool(ctx.state_machine.status.error),
+        recording=ctx.recorder.active,
+        replaying=ctx.replaying,
     )
     return Response(content=body, media_type="text/plain; version=0.0.4")
 

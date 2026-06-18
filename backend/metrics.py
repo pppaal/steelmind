@@ -46,7 +46,28 @@ class Metrics:
         lines.append(f"steelmind_ai_latency_ms_count {self._latency_count}")
         return lines
 
-    def render(self, *, ws_clients: int, ai_history: int, ai_sessions: int) -> str:
+    def render(
+        self,
+        *,
+        ws_clients: int,
+        ai_history: int,
+        ai_sessions: int,
+        state: str = "IDLE",
+        estopped: bool = False,
+        recording: bool = False,
+        replaying: bool = False,
+    ) -> str:
+        from .state_machine import VALID_TRANSITIONS  # all known states
+
+        all_states = {state, *(s.value for s in VALID_TRANSITIONS)}
+        state_lines = [
+            "# HELP steelmind_robot_state Current state (1 for the active state).",
+            "# TYPE steelmind_robot_state gauge",
+            *(
+                f'steelmind_robot_state{{state="{s}"}} {1 if s == state else 0}'
+                for s in sorted(all_states)
+            ),
+        ]
         lines = [
             "# HELP steelmind_transitions_total Total state transitions broadcast.",
             "# TYPE steelmind_transitions_total counter",
@@ -81,6 +102,16 @@ class Metrics:
             "# HELP steelmind_ai_sessions Distinct AI conversation sessions.",
             "# TYPE steelmind_ai_sessions gauge",
             f"steelmind_ai_sessions {ai_sessions}",
+            "# HELP steelmind_estopped Whether a latched stop is active (1) or not (0).",
+            "# TYPE steelmind_estopped gauge",
+            f"steelmind_estopped {1 if estopped else 0}",
+            "# HELP steelmind_recording Whether a session recording is active.",
+            "# TYPE steelmind_recording gauge",
+            f"steelmind_recording {1 if recording else 0}",
+            "# HELP steelmind_replaying Whether a session replay is in progress.",
+            "# TYPE steelmind_replaying gauge",
+            f"steelmind_replaying {1 if replaying else 0}",
+            *state_lines,
             *self._histogram_lines(),
             "",
         ]

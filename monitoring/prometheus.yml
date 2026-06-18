@@ -1,0 +1,12 @@
+# Prometheus scrape config for the steelmind backend.
+# Used by the docker-compose `monitoring` profile:
+#   docker compose --profile monitoring up
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: steelmind
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]

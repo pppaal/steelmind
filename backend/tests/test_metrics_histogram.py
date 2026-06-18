@@ -31,3 +31,16 @@ def test_render_includes_counters_and_gauges() -> None:
     assert "steelmind_ws_clients 3" in out
     assert "steelmind_ai_history 7" in out
     assert "steelmind_ai_sessions 2" in out
+
+
+def test_render_includes_state_and_status_gauges() -> None:
+    out = Metrics().render(
+        ws_clients=0, ai_history=0, ai_sessions=0,
+        state="WALKING", estopped=True, recording=True, replaying=False,
+    )
+    assert "steelmind_estopped 1" in out
+    assert "steelmind_recording 1" in out
+    assert "steelmind_replaying 0" in out
+    # The active state reads 1, the others 0.
+    assert 'steelmind_robot_state{state="WALKING"} 1' in out
+    assert 'steelmind_robot_state{state="IDLE"} 0' in out
