@@ -61,6 +61,11 @@ or LeRobot SO-100 servos.
   which simulates the planned motion (`backend/preview.py`) and reports which
   joints would be clamped or rate-limited and the predicted end-effector
   pose, without moving. The console's Reach **Preview** button surfaces it.
+* **Deadman / hold-to-enable** (opt-in via `DEADMAN_REQUIRED`) — when armed,
+  motion endpoints reject unless the operator is holding the console's *Hold
+  to enable* control (which streams `{type:deadman}` over `/ws`), and an
+  in-flight motion is frozen if the hold lapses for `DEADMAN_TIMEOUT_SEC`.
+  Off by default so the simulator and scripted callers are unaffected.
 
 ## Control modes
 
@@ -244,6 +249,8 @@ secret convention); the file is read with trailing whitespace stripped.
 | `HARDWARE_WATCHDOG_SEC`        | backend  | `2.0`                      | read-loop stall → E-stop                       |
 | `EFFORT_PROTECTION`            | backend  | `1`                        | enable joint-overload protective stop          |
 | `EFFORT_OVERLOAD_FRAMES`       | backend  | `3`                        | consecutive over-limit frames before tripping  |
+| `DEADMAN_REQUIRED`             | backend  | `0`                        | require hold-to-enable for motion              |
+| `DEADMAN_TIMEOUT_SEC`          | backend  | `1.0`                      | max gap between holds before motion freezes     |
 | `KEYFRAME_SEGMENT_SEC`         | backend  | `1.5`                      | min-jerk segment between poses                 |
 | `SENSOR_HZ`                    | backend  | `20`                       | sensor + trajectory tick rate                  |
 | `AI_TIMEOUT_SEC`               | backend  | `20`                       | per-request anthropic timeout                  |

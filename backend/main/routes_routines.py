@@ -7,7 +7,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_operator, require_viewer
-from .context import _validate_name, ctx
+from .context import _validate_name, ctx, require_deadman
 from .motion import _run_routine, _validate_routine_steps
 from .schemas import RoutineBody
 
@@ -45,6 +45,7 @@ async def delete_routine(name: str) -> dict:
 
 @router.post("/routines/{name}/run", dependencies=[Depends(require_operator)])
 async def run_routine(name: str) -> dict:
+    require_deadman()
     raw = ctx.routines.get(name)
     if raw is None:
         raise HTTPException(status_code=404, detail=f"unknown routine: {name}")

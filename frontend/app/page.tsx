@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import AICommandInput from "@/components/AICommandInput";
 import CommandBar from "@/components/CommandBar";
+import DeadmanButton from "@/components/DeadmanButton";
 import EventLog from "@/components/EventLog";
 import HardwarePanel from "@/components/HardwarePanel";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
@@ -14,7 +15,7 @@ import { useRobotSocket } from "@/lib/useRobotSocket";
 const RobotScene = dynamic(() => import("@/components/RobotScene"), { ssr: false });
 
 export default function Page() {
-  const { connection, status, sensor, history, log, lastReason, routine, sendCommand } =
+  const { connection, status, sensor, history, log, lastReason, routine, sendCommand, sendDeadman } =
     useRobotSocket();
   const state = status?.state ?? "IDLE";
   const apiBase = useMemo(() => deriveApiBase(), []);
@@ -88,7 +89,8 @@ export default function Page() {
         />
       </div>
 
-      <div className="flex justify-center border-t border-zinc-800 bg-zinc-950/80 px-4 py-3">
+      <div className="flex items-center justify-center gap-3 border-t border-zinc-800 bg-zinc-950/80 px-4 py-3">
+        <DeadmanButton onPing={sendDeadman} enabled={connection === "open"} />
         <AICommandInput />
       </div>
 

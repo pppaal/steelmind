@@ -9,7 +9,7 @@ from ..behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from ..models import CommandRequest, CommandResponse, RobotState
 from ..robot_config import load_config
 from .config import MAX_JOG_RAD, ROBOT_CONFIG
-from .context import _apply_calibration, ctx
+from .context import _apply_calibration, ctx, require_deadman
 from .motion import _dispatch_command
 from .schemas import CalibrationRequest, JogRequest
 
@@ -49,6 +49,7 @@ async def jog(req: JogRequest) -> dict:
     for bring-up/testing — bounded by MAX_JOG_RAD and the joint's own soft
     limits (clamped inside the HAL). Reads current position, adds delta,
     writes the new absolute target."""
+    require_deadman()
     if ctx.hardware is None:
         raise HTTPException(status_code=503, detail="hardware not ready")
     spec = next((j for j in ctx.joints if j.name == req.joint), None)
@@ -92,6 +93,7 @@ async def set_calibration(req: CalibrationRequest) -> dict:
 
 @router.post("/command", response_model=CommandResponse, dependencies=[Depends(require_operator)])
 async def command(req: CommandRequest) -> CommandResponse:
+    require_deadman()
     return await _dispatch_command(req)
 
 

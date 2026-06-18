@@ -15,6 +15,7 @@ class Metrics:
         self.rate_limited_total = 0
         self.sensor_frames_total = 0
         self.overload_stops_total = 0
+        self.deadman_stops_total = 0
         # AI latency histogram: cumulative counts per upper bound (ms).
         self._latency_bucket_counts = [0] * len(AI_LATENCY_BUCKETS_MS)
         self._latency_overflow = 0
@@ -68,6 +69,9 @@ class Metrics:
             "# HELP steelmind_overload_stops_total Protective stops triggered by joint overload.",
             "# TYPE steelmind_overload_stops_total counter",
             f"steelmind_overload_stops_total {self.overload_stops_total}",
+            "# HELP steelmind_deadman_stops_total Motion freezes triggered by deadman release.",
+            "# TYPE steelmind_deadman_stops_total counter",
+            f"steelmind_deadman_stops_total {self.deadman_stops_total}",
             "# HELP steelmind_ws_clients Current connected WebSocket clients.",
             "# TYPE steelmind_ws_clients gauge",
             f"steelmind_ws_clients {ws_clients}",

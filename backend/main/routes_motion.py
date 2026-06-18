@@ -8,7 +8,7 @@ from ..auth import require_operator, require_viewer
 from ..preview import simulate_trajectory
 from ..trajectory import min_jerk
 from .config import KEYFRAME_SEGMENT_SEC, SENSOR_HZ
-from .context import _validate_name, ctx
+from .context import _validate_name, ctx, require_deadman
 from .motion import _play
 from .schemas import KeyframePlayRequest, ReachRequest
 
@@ -37,6 +37,7 @@ async def play_keyframes(req: KeyframePlayRequest) -> dict:
     if req.dry_run:
         specs = {j.name: j for j in ctx.joints}
         return {"dry_run": True, "names": req.names, "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ)}
+    require_deadman()
     await _play(f"keyframes:{'+'.join(req.names)}", traj)
     return {"ok": True, "names": req.names, "duration": traj.duration}
 
@@ -114,6 +115,7 @@ async def reach(req: ReachRequest) -> dict:
             "angles": angles,
             "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain),
         }
+    require_deadman()
     await _play(f"reach:({req.x:.2f},{req.y:.2f})", traj)
     return {
         "ok": True,

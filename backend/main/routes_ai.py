@@ -11,7 +11,7 @@ from ..ai_commander import AICommanderError
 from ..auth import require_admin, require_operator
 from ..plan_validator import validate_plan
 from .config import logger
-from .context import _client_ip, _session_key, _validate_name, ctx
+from .context import _client_ip, _session_key, _validate_name, ctx, require_deadman
 from .motion import _coerce_routine, _execute_plan, _run_routine
 from .schemas import (
     AICommandRequest,
@@ -37,6 +37,8 @@ async def ai_routine(req: AIRoutineRequest, request: Request) -> dict:
     repair retry on failure), save under `name`, and optionally run."""
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+    if req.run:
+        require_deadman()
     _validate_name(req.name, "routine")
     text = (req.text or "").strip()
     if not text:
@@ -100,6 +102,7 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
 
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+    require_deadman()
 
     client_key = _client_ip(request)
     allowed, retry_after = await ctx.ai_rate.allow(client_key)

@@ -41,6 +41,8 @@ from .config import (
     ANTHROPIC_API_KEY,
     CALIBRATION_FILE,
     CORS_ORIGINS,
+    DEADMAN_REQUIRED,
+    DEADMAN_TIMEOUT_SEC,
     EFFORT_OVERLOAD_FRAMES,
     EFFORT_PROTECTION,
     HARDWARE_WATCHDOG_SEC,
@@ -143,6 +145,8 @@ class AppContext:
         self.current_behavior_task: asyncio.Task[None] | None = None
         # Per-joint consecutive-overload frame counters for protective stop.
         self._overload_counts: dict[str, int] = {}
+        # Deadman: monotonic deadline; motion is permitted while now < this.
+        self._deadman_until: float = 0.0
         self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
@@ -261,6 +265,7 @@ class AppContext:
                 if self.watchdog:
                     self.watchdog.feed()
                 await self._check_overload(snapshot)
+                await self._check_deadman()
                 data = snapshot_to_sensor(snapshot)
                 await self.manager.broadcast(SensorEvent(data=data))
                 self.metrics.sensor_frames_total += 1
@@ -307,6 +312,40 @@ class AppContext:
         await self.state_machine.transition(RobotState.IDLE, reason=reason, force=True)
         await self.state_machine.set_behavior(None)
         await self.state_machine.set_error(reason)
+
+    # --- Deadman / hold-to-enable -------------------------------------------
+    def refresh_deadman(self) -> None:
+        """Extend the deadman deadline — called for each hold ping the operator
+        sends over /ws."""
+        self._deadman_until = time.monotonic() + DEADMAN_TIMEOUT_SEC
+
+    def deadman_ok(self) -> bool:
+        """True when motion is permitted: either the deadman isn't required or
+        the operator is currently holding the enable control."""
+        if not DEADMAN_REQUIRED:
+            return True
+        return time.monotonic() < self._deadman_until
+
+    def _motion_active(self) -> bool:
+        return bool(
+            (self.current_behavior_task and not self.current_behavior_task.done())
+            or (self.routine_task and not self.routine_task.done())
+        )
+
+    async def _check_deadman(self) -> None:
+        """Freeze any in-flight motion if the deadman hold lapses. Unlike a
+        protective stop this doesn't latch — it just cancels the active motion
+        (the HAL holds the last commanded pose); re-holding re-arms motion."""
+        if not DEADMAN_REQUIRED or self.deadman_ok():
+            return
+        if not self._motion_active():
+            return
+        logger.warning("deadman released — freezing motion")
+        self.metrics.deadman_stops_total += 1
+        if self.routine_task and not self.routine_task.done():
+            self.routine_task.cancel()
+        if self.current_behavior_task and not self.current_behavior_task.done():
+            self.current_behavior_task.cancel()
 
     async def _transition_loop(self) -> None:
         queue = self.state_machine.subscribe()
@@ -402,4 +441,14 @@ def _validate_name(name: str, kind: str) -> None:
                 f"invalid {kind} name: 1-64 chars of letters, digits, space, "
                 "underscore or hyphen only"
             ),
+        )
+
+
+def require_deadman() -> None:
+    """Reject a motion request when the deadman is required but not currently
+    held. A no-op unless DEADMAN_REQUIRED is set."""
+    if not ctx.deadman_ok():
+        raise HTTPException(
+            status_code=423,
+            detail="deadman not held — hold the enable control to move",
         )
