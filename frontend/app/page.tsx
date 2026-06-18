@@ -6,6 +6,7 @@ import AICommandInput from "@/components/AICommandInput";
 import CameraPanel from "@/components/CameraPanel";
 import CommandBar from "@/components/CommandBar";
 import DeadmanButton from "@/components/DeadmanButton";
+import DemoPanel from "@/components/DemoPanel";
 import EventLog from "@/components/EventLog";
 import RecordingPanel from "@/components/RecordingPanel";
 import HardwarePanel from "@/components/HardwarePanel";
@@ -76,6 +77,7 @@ export default function Page() {
           <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
           <CameraPanel apiBase={apiBase} />
           <RecordingPanel apiBase={apiBase} />
+          <DemoPanel apiBase={apiBase} />
           <EventLog entries={log} />
         </div>
         <HardwarePanel

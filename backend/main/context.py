@@ -19,6 +19,7 @@ from ..ai_commander import AICommander
 from ..calibration import Calibration
 from ..camera import Camera, build_camera
 from ..connection_manager import ConnectionManager
+from ..demos import DemoRecorder
 from ..hardware import RobotHardware, build_hardware
 from ..hardware.base import JointSpec
 from ..journal import Journal
@@ -123,6 +124,7 @@ class AppContext:
         # Tap the broadcast stream so a recording captures every event.
         self.recorder = SessionRecorder()
         self.manager.tap = self.recorder.capture
+        self.demos = DemoRecorder(fps=SENSOR_HZ)
         self.ai = AICommander(api_key=ANTHROPIC_API_KEY, timeout_sec=AI_TIMEOUT_SEC)
         # Marks the app as ready (lifespan started) vs alive (process up).
         # Liveness flips False on shutdown so /readyz returns 503 and load
@@ -282,6 +284,8 @@ class AppContext:
                 await self._check_overload(snapshot)
                 await self._check_deadman()
                 data = snapshot_to_sensor(snapshot)
+                if self.demos.active:
+                    self.demos.capture(data.joint_positions)
                 await self.manager.broadcast(SensorEvent(data=data))
                 self.metrics.sensor_frames_total += 1
             except Exception:
