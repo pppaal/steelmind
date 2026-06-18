@@ -47,6 +47,7 @@ def load_config(path: str | Path) -> list[JointSpec]:
           lower_limit_deg: -180   # OR lower_limit (radians)
           upper_limit_deg: 180
           max_velocity: 3.0       # rad/s
+          max_effort: 0.0         # optional; >0 enables overload protection
           offset_deg: 0           # optional calibration
           invert: false           # optional
     """
@@ -83,6 +84,7 @@ def load_config(path: str | Path) -> list[JointSpec]:
                 lower_limit=float(lower),
                 upper_limit=float(upper),
                 max_velocity=float(j.get("max_velocity", 3.0)),
+                max_effort=float(j.get("max_effort", 0.0)),
                 offset=float(offset),
                 invert=bool(j.get("invert", False)),
             )

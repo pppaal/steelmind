@@ -27,6 +27,7 @@ class SensorData(BaseModel):
     imu_linear_acceleration: Vector3 = Field(default_factory=Vector3)
     joint_positions: dict[str, float] = Field(default_factory=dict)
     joint_velocities: dict[str, float] = Field(default_factory=dict)
+    joint_efforts: dict[str, float] = Field(default_factory=dict)
     battery_voltage: float = 0.0
     battery_percent: float = 0.0
 

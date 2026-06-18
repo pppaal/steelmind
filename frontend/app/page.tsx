@@ -77,7 +77,7 @@ export default function Page() {
           apiBase={apiBase}
           jointNames={jointNames}
           routine={routine}
-          serverEstopped={status?.error === "estop latched"}
+          serverEstopped={Boolean(status?.error)}
         />
         <TelemetryPanel
           connection={connection}

@@ -47,6 +47,12 @@ or LeRobot SO-100 servos.
   (`/ai-command`) and to whole routines (`/ai-routine`).
 * **Safety** (`backend/safety.py`) — joint-limit clamping, velocity slewing,
   and a watchdog that E-stops if the read loop stalls. `/estop` latches.
+  **Overload protection**: a joint reporting effort above its config
+  `max_effort` for several consecutive frames trips a protective stop (cuts
+  torque, drops to IDLE, latches an error cleared via `/estop/clear`).
+  Per-joint `max_effort: 0` (the default) leaves it inert; tune via
+  `EFFORT_PROTECTION` / `EFFORT_OVERLOAD_FRAMES`. Joint load streams over
+  `/ws` (`joint_efforts`) and shows as bars in the telemetry panel.
 
 ## Control modes
 
@@ -228,6 +234,8 @@ secret convention); the file is read with trailing whitespace stripped.
 | `ROUTINES_FILE`                | backend  | `routines.json`            | routine macro store                            |
 | `MAX_JOG_RAD`                  | backend  | `0.35`                     | max single `/jog` step                         |
 | `HARDWARE_WATCHDOG_SEC`        | backend  | `2.0`                      | read-loop stall → E-stop                       |
+| `EFFORT_PROTECTION`            | backend  | `1`                        | enable joint-overload protective stop          |
+| `EFFORT_OVERLOAD_FRAMES`       | backend  | `3`                        | consecutive over-limit frames before tripping  |
 | `KEYFRAME_SEGMENT_SEC`         | backend  | `1.5`                      | min-jerk segment between poses                 |
 | `SENSOR_HZ`                    | backend  | `20`                       | sensor + trajectory tick rate                  |
 | `AI_TIMEOUT_SEC`               | backend  | `20`                       | per-request anthropic timeout                  |

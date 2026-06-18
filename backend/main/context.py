@@ -26,11 +26,11 @@ from ..keyframes import KeyframeStore
 from ..kinematics import PlanarChain
 from ..metrics import Metrics
 from ..middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
-from ..models import SensorData, SensorEvent, StatusEvent, Vector3
+from ..models import RobotState, SensorData, SensorEvent, StatusEvent, Vector3
 from ..rate_limit import TokenBucket
 from ..robot_config import load_chain, load_config
 from ..routines import RoutineStore
-from ..safety import Watchdog
+from ..safety import Watchdog, overloaded_joints
 from ..state_machine import StateMachine
 from ..tracing import configure as configure_tracing
 from . import config
@@ -41,6 +41,8 @@ from .config import (
     ANTHROPIC_API_KEY,
     CALIBRATION_FILE,
     CORS_ORIGINS,
+    EFFORT_OVERLOAD_FRAMES,
+    EFFORT_PROTECTION,
     HARDWARE_WATCHDOG_SEC,
     JOURNAL_BACKEND,
     JOURNAL_DB,
@@ -83,6 +85,7 @@ def snapshot_to_sensor(snapshot) -> SensorData:
         imu_linear_acceleration=Vector3(x=acc[0], y=acc[1], z=acc[2]),
         joint_positions={n: js.position for n, js in snapshot.joints.items()},
         joint_velocities={n: js.velocity for n, js in snapshot.joints.items()},
+        joint_efforts={n: js.effort for n, js in snapshot.joints.items()},
         battery_voltage=snapshot.battery_voltage,
         battery_percent=snapshot.battery_percent,
     )
@@ -138,6 +141,8 @@ class AppContext:
         self.routines = RoutineStore(ROUTINES_FILE)
         self.routine_task: asyncio.Task[None] | None = None
         self.current_behavior_task: asyncio.Task[None] | None = None
+        # Per-joint consecutive-overload frame counters for protective stop.
+        self._overload_counts: dict[str, int] = {}
         self.watchdog: Watchdog | None = None
         self._sensor_task: asyncio.Task[None] | None = None
         self._transition_task: asyncio.Task[None] | None = None
@@ -255,6 +260,7 @@ class AppContext:
                 snapshot = await self.hardware.read()
                 if self.watchdog:
                     self.watchdog.feed()
+                await self._check_overload(snapshot)
                 data = snapshot_to_sensor(snapshot)
                 await self.manager.broadcast(SensorEvent(data=data))
                 self.metrics.sensor_frames_total += 1
@@ -263,6 +269,44 @@ class AppContext:
                 # keep cycling so the watchdog gets to make the decision.
                 logger.exception("sensor loop iteration failed")
             await asyncio.sleep(period)
+
+    async def _check_overload(self, snapshot) -> None:
+        """Trip a protective stop when a joint sustains effort above its
+        configured max_effort. Requires EFFORT_OVERLOAD_FRAMES consecutive
+        over-limit frames so a single transient spike doesn't cut motion."""
+        if not EFFORT_PROTECTION or snapshot.estopped:
+            self._overload_counts.clear()
+            return
+        specs = {j.name: j for j in self.joints}
+        efforts = {n: js.effort for n, js in snapshot.joints.items()}
+        over = set(overloaded_joints(efforts, specs))
+        # Drop counters for joints no longer over-limit.
+        for name in [n for n in self._overload_counts if n not in over]:
+            del self._overload_counts[name]
+        tripped: list[str] = []
+        for name in over:
+            self._overload_counts[name] = self._overload_counts.get(name, 0) + 1
+            if self._overload_counts[name] >= EFFORT_OVERLOAD_FRAMES:
+                tripped.append(name)
+        if tripped:
+            await self.protective_stop(f"overload: {', '.join(sorted(tripped))}")
+
+    async def protective_stop(self, reason: str) -> None:
+        """Latching, hardware-level stop triggered by a safety reflex (e.g.
+        overload). Mirrors the operator E-stop: cancels motion, cuts torque,
+        drops to IDLE, and latches an error that requires /estop/clear."""
+        logger.warning("protective stop: %s", reason)
+        self.metrics.overload_stops_total += 1
+        self._overload_counts.clear()
+        if self.routine_task and not self.routine_task.done():
+            self.routine_task.cancel()
+        if self.current_behavior_task and not self.current_behavior_task.done():
+            self.current_behavior_task.cancel()
+        if self.hardware:
+            await self.hardware.estop()
+        await self.state_machine.transition(RobotState.IDLE, reason=reason, force=True)
+        await self.state_machine.set_behavior(None)
+        await self.state_machine.set_error(reason)
 
     async def _transition_loop(self) -> None:
         queue = self.state_machine.subscribe()

@@ -34,6 +34,24 @@ def clamp_targets(
     return out, clamped
 
 
+def overloaded_joints(
+    efforts: dict[str, float], joints: dict[str, JointSpec]
+) -> list[str]:
+    """Names of joints whose measured effort exceeds their max_effort.
+
+    Joints with max_effort <= 0 have protection disabled and are never
+    reported. Pure function so the protective-stop policy can be unit-tested
+    without a running event loop."""
+    over: list[str] = []
+    for name, effort in efforts.items():
+        spec = joints.get(name)
+        if spec is None or spec.max_effort <= 0:
+            continue
+        if effort > spec.max_effort:
+            over.append(name)
+    return over
+
+
 def slew_toward(
     current: dict[str, float],
     target: dict[str, float],

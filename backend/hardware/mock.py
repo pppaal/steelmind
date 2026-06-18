@@ -26,6 +26,12 @@ from .base import (
     RobotHardware,
 )
 
+# Maps the simulated tracking error (|target - position|, radians) to an
+# effort reading. A real servo's load rises while it's fighting to reach a
+# far/blocked target; modelling effort as proportional to that error lets the
+# overload-protection path be exercised without real hardware.
+_EFFORT_GAIN = 8.0
+
 
 class MockHardware(RobotHardware):
     def __init__(self, joints: list[JointSpec]) -> None:
@@ -107,6 +113,13 @@ class MockHardware(RobotHardware):
                     name=name,
                     position=pos,
                     velocity=(pos - previous.get(name, pos)) / dt,
+                    # Effort ~ how hard the servo is still pulling toward its
+                    # target. Zero at rest; spikes during a large/blocked move.
+                    effort=(
+                        _EFFORT_GAIN * abs(self._targets.get(name, pos) - pos)
+                        if self._enabled and not self._estopped
+                        else 0.0
+                    ),
                 )
                 for name, pos in self._positions.items()
             }

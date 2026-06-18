@@ -25,6 +25,10 @@ class JointSpec:
     # Max commanded angular velocity (rad/s). The HAL slews toward target
     # at this rate so a step input doesn't snap the joint instantly.
     max_velocity: float = 3.0
+    # Overload threshold (same unit as JointState.effort). When > 0, sustained
+    # effort above this trips a protective stop. 0 disables overload protection
+    # for this joint (the default, so configs that don't set it are unaffected).
+    max_effort: float = 0.0
     # Calibration offset (rad) — added to commanded target before writing,
     # subtracted from measured position before reporting. Lets you zero a
     # joint without re-mounting the servo horn.

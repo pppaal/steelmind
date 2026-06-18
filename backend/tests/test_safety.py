@@ -5,7 +5,21 @@ import asyncio
 import pytest
 
 from backend.hardware.base import JointSpec
-from backend.safety import Watchdog, clamp_targets, slew_toward
+from backend.safety import Watchdog, clamp_targets, overloaded_joints, slew_toward
+
+
+def test_overloaded_joints_reports_over_limit() -> None:
+    joints = {
+        "a": JointSpec(name="a", hardware_id="1", lower_limit=-1, upper_limit=1, max_effort=5.0),
+        "b": JointSpec(name="b", hardware_id="2", lower_limit=-1, upper_limit=1, max_effort=5.0),
+    }
+    assert overloaded_joints({"a": 6.0, "b": 1.0}, joints) == ["a"]
+
+
+def test_overloaded_joints_ignores_disabled_protection() -> None:
+    # max_effort defaults to 0 → protection disabled, never reported.
+    joints = {"a": JointSpec(name="a", hardware_id="1", lower_limit=-1, upper_limit=1)}
+    assert overloaded_joints({"a": 9999.0}, joints) == []
 
 
 def _joints() -> dict[str, JointSpec]:
