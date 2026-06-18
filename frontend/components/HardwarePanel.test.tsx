@@ -191,6 +191,34 @@ describe("HardwarePanel", () => {
     expect(screen.getByRole("button", { name: "Reach" })).toBeDisabled();
   });
 
+  it("blocks Reach when the target violates a safety zone (virtual wall)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url) => {
+        if (url.endsWith("/fk")) return { x: 0.2, y: 0.1, reach: 0.32 };
+        if (url.endsWith("/workspace"))
+          return {
+            base: [0, 0],
+            inner_radius: 0.0,
+            outer_radius: 0.5,
+            zone: { min_x: null, max_x: null, min_y: 0.0, max_y: null, min_radius: null, keepout: [], base: [0, 0] },
+          };
+        return { keyframes: {} };
+      }),
+    );
+    render(<HardwarePanel apiBase="http://x" jointNames={["shoulder_lift"]} />);
+    const xInput = await screen.findByDisplayValue("0.15");
+    // y below the floor (min_y = 0) → blocked even though it's within reach.
+    const yInput = screen.getByDisplayValue("0.10");
+    fireEvent.change(yInput, { target: { value: "-0.2" } });
+    await waitFor(() => expect(screen.getByText(/outside safe zone/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Reach" })).toBeDisabled();
+    // Bring it back inside → unblocked.
+    fireEvent.change(yInput, { target: { value: "0.1" } });
+    fireEvent.change(xInput, { target: { value: "0.15" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reach" })).not.toBeDisabled());
+  });
+
   it("previews a reach (dry_run) without moving the robot", async () => {
     const calls: { url: string; body: { dry_run?: boolean } }[] = [];
     vi.stubGlobal(

@@ -28,11 +28,12 @@ from ..metrics import Metrics
 from ..middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from ..models import RobotState, SensorData, SensorEvent, StatusEvent, Vector3
 from ..rate_limit import TokenBucket
-from ..robot_config import load_chain, load_config
+from ..robot_config import load_chain, load_config, load_safety_zone
 from ..routines import RoutineStore
 from ..safety import Watchdog, overloaded_joints
 from ..state_machine import StateMachine
 from ..tracing import configure as configure_tracing
+from ..zones import SafetyZone
 from . import config
 from .config import (
     AI_RATE_BURST,
@@ -138,6 +139,7 @@ class AppContext:
         self.hardware: RobotHardware | None = None
         self.joints: list[JointSpec] = []
         self.chain: PlanarChain | None = None
+        self.safety_zone: SafetyZone | None = None
         self.calibration = Calibration(CALIBRATION_FILE)
         self.keyframes = KeyframeStore(KEYFRAMES_FILE)
         self.routines = RoutineStore(ROUTINES_FILE)
@@ -161,6 +163,7 @@ class AppContext:
         await self.routines.load()
         self.joints = _apply_calibration(load_config(ROBOT_CONFIG), self.calibration)
         self.chain = load_chain(ROBOT_CONFIG)
+        self.safety_zone = load_safety_zone(ROBOT_CONFIG)
         self.hardware = build_hardware(self.joints)
         await self.hardware.init()
         # The watchdog fires HAL.estop() if the sensor loop stops feeding

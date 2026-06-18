@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_operator, require_viewer
-from ..preview import simulate_trajectory
+from ..preview import simulate_trajectory, trajectory_zone_violation
 from ..trajectory import min_jerk
 from .config import KEYFRAME_SEGMENT_SEC, SENSOR_HZ
 from .context import _validate_name, ctx, require_deadman
@@ -36,8 +36,16 @@ async def play_keyframes(req: KeyframePlayRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if req.dry_run:
         specs = {j.name: j for j in ctx.joints}
-        return {"dry_run": True, "names": req.names, "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ)}
+        return {
+            "dry_run": True,
+            "names": req.names,
+            "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain, zone=ctx.safety_zone),
+        }
     require_deadman()
+    if ctx.chain is not None and ctx.safety_zone is not None:
+        wall = trajectory_zone_violation(traj, ctx.chain, ctx.safety_zone, hz=SENSOR_HZ)
+        if wall:
+            raise HTTPException(status_code=422, detail=f"motion blocked by safety zone: {wall}")
     await _play(f"keyframes:{'+'.join(req.names)}", traj)
     return {"ok": True, "names": req.names, "duration": traj.duration}
 
@@ -85,7 +93,10 @@ async def workspace() -> dict:
     if ctx.chain is None:
         raise HTTPException(status_code=400, detail="no kinematic chain configured")
     limits = {j.name: (j.lower_limit, j.upper_limit) for j in ctx.joints}
-    return ctx.chain.workspace(limits)
+    env = ctx.chain.workspace(limits)
+    if ctx.safety_zone is not None:
+        env["zone"] = ctx.safety_zone.as_dict()
+    return env
 
 
 @router.post("/reach", dependencies=[Depends(require_operator)])
@@ -113,9 +124,13 @@ async def reach(req: ReachRequest) -> dict:
             "reached": reached,
             "residual": residual,
             "angles": angles,
-            "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain),
+            "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain, zone=ctx.safety_zone),
         }
     require_deadman()
+    if ctx.safety_zone is not None:
+        wall = trajectory_zone_violation(traj, ctx.chain, ctx.safety_zone, hz=SENSOR_HZ)
+        if wall:
+            raise HTTPException(status_code=422, detail=f"motion blocked by safety zone: {wall}")
     await _play(f"reach:({req.x:.2f},{req.y:.2f})", traj)
     return {
         "ok": True,
