@@ -38,6 +38,44 @@ export function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// --- Command signing (replay protection) -----------------------------------
+// Must match backend/signing.py canonical(): compact, recursively key-sorted
+// JSON so client and server sign byte-identical strings.
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const body = Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+    .join(",");
+  return `{${body}}`;
+}
+
+function _toHex(buf: ArrayBuffer): string {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// HMAC-SHA256(key, "ts:nonce:command:canonical(params)") as lowercase hex.
+export async function signCommand(
+  key: string,
+  command: string,
+  params: Record<string, unknown>,
+  ts: number,
+  nonce: string,
+): Promise<string> {
+  const enc = new TextEncoder();
+  const msg = `${ts}:${nonce}:${command}:${stableStringify(params ?? {})}`;
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return _toHex(await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(msg)));
+}
+
 export type ApiAICommandRequest =
   paths["/ai-command"]["post"]["requestBody"]["content"]["application/json"];
 export type ApiAICommandResponse = components["schemas"]["AICommandResponse"];

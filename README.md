@@ -284,6 +284,8 @@ secret convention); the file is read with trailing whitespace stripped.
 | `EFFORT_OVERLOAD_FRAMES`       | backend  | `3`                        | consecutive over-limit frames before tripping  |
 | `DEADMAN_REQUIRED`             | backend  | `0`                        | require hold-to-enable for motion              |
 | `DEADMAN_TIMEOUT_SEC`          | backend  | `1.0`                      | max gap between holds before motion freezes     |
+| `REQUIRE_SIGNED_COMMANDS`      | backend  | `0`                        | require HMAC-signed `/ws` commands (replay defense) |
+| `COMMAND_SKEW_SEC`             | backend  | `30`                       | max command timestamp skew                      |
 | `KEYFRAME_SEGMENT_SEC`         | backend  | `1.5`                      | min-jerk segment between poses                 |
 | `SENSOR_HZ`                    | backend  | `20`                       | sensor + trajectory tick rate                  |
 | `AI_TIMEOUT_SEC`               | backend  | `20`                       | per-request anthropic timeout                  |
@@ -309,6 +311,14 @@ secret convention); the file is read with trailing whitespace stripped.
 
 When no `API_TOKEN*` is set, auth is bypassed (single-user dev/demo). A bare
 `API_TOKEN` grants the operator role (backwards compatible).
+
+**Command replay protection** — set `REQUIRE_SIGNED_COMMANDS=1` (with auth on)
+to require every live `/ws` command to carry a fresh `ts`/`nonce`/`sig`, where
+`sig = HMAC-SHA256(connection token, "ts:nonce:command:params")`. The server
+rejects stale (outside `COMMAND_SKEW_SEC`), replayed (reused nonce), or
+unsigned/forged frames, so a captured control frame can't move the robot. The
+console signs automatically when it holds a token; `/health` advertises
+`signed_commands`. Off by default.
 
 ## Optional integrations
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getApiToken } from "./api";
+import { getApiToken, signCommand } from "./api";
 import {
   emptyState,
   reduce,
@@ -113,7 +113,29 @@ export function useRobotSocket(): RobotSocket {
     (command: string, params: Record<string, unknown> = {}) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "command", payload: { command, params } }));
+      const token = getApiToken();
+      if (!token) {
+        ws.send(JSON.stringify({ type: "command", payload: { command, params } }));
+        return;
+      }
+      // Sign with the connection token so the server can reject replays when
+      // REQUIRE_SIGNED_COMMANDS is on (harmless when it isn't).
+      const ts = Math.floor(Date.now() / 1000);
+      const nonce =
+        crypto.randomUUID?.() ?? `${ts}-${Math.random().toString(36).slice(2)}`;
+      void signCommand(token, command, params, ts, nonce)
+        .then((sig) => {
+          const w = wsRef.current;
+          if (w && w.readyState === WebSocket.OPEN) {
+            w.send(JSON.stringify({ type: "command", payload: { command, params }, ts, nonce, sig }));
+          }
+        })
+        .catch(() => {
+          const w = wsRef.current;
+          if (w && w.readyState === WebSocket.OPEN) {
+            w.send(JSON.stringify({ type: "command", payload: { command, params } }));
+          }
+        });
     },
     [],
   );
