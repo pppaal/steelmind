@@ -25,4 +25,13 @@ def build_camera() -> Camera | None:
         h = int(os.getenv("CAMERA_HEIGHT", "120"))
         logger.info("camera: mock %dx%d", w, h)
         return MockCamera(width=w, height=h)
+    if backend == "opencv":
+        from .opencv import OpenCVCamera
+
+        dev = os.getenv("CAMERA_DEVICE", "0")
+        device: int | str = int(dev) if dev.isdigit() else dev
+        w = int(os.getenv("CAMERA_WIDTH", "640"))
+        h = int(os.getenv("CAMERA_HEIGHT", "480"))
+        logger.info("camera: opencv device=%s %dx%d", device, w, h)
+        return OpenCVCamera(device=device, width=w, height=h)
     raise RuntimeError(f"unknown CAMERA: {backend!r}")

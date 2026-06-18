@@ -92,6 +92,27 @@ def test_build_camera_unknown_rejected(monkeypatch) -> None:
         build_camera()
 
 
+def test_build_camera_opencv_constructs_without_cv2(monkeypatch) -> None:
+    # Construction must not import cv2 (lazy at init), so the factory works
+    # even where opencv isn't installed.
+    from backend.camera.opencv import OpenCVCamera
+
+    monkeypatch.setenv("CAMERA", "opencv")
+    monkeypatch.setenv("CAMERA_DEVICE", "2")
+    cam = build_camera()
+    assert isinstance(cam, OpenCVCamera)
+    assert cam.available is False  # not opened yet
+    assert cam._device == 2
+
+
+@pytest.mark.asyncio
+async def test_opencv_read_before_init_raises() -> None:
+    from backend.camera.opencv import OpenCVCamera
+
+    with pytest.raises(CameraError):
+        await OpenCVCamera().read_frame()
+
+
 def test_camera_info_and_snapshot(camera_app: TestClient) -> None:
     info = camera_app.get("/camera/info").json()
     assert info == {"available": True, "width": 160, "height": 120}
@@ -105,3 +126,29 @@ def test_camera_absent_by_default(fresh_app: TestClient) -> None:
     # fresh_app ships no CAMERA → info reports unavailable, snapshot 503.
     assert fresh_app.get("/camera/info").json() == {"available": False}
     assert fresh_app.get("/camera/snapshot").status_code == 503
+    assert fresh_app.get("/camera/stream").status_code == 503
+
+
+def test_multipart_chunk_framing() -> None:
+    from backend.main.routes_camera import _multipart_chunk
+
+    chunk = _multipart_chunk(b"\x01\x02\x03", "image/jpeg")
+    assert chunk.startswith(b"--frame\r\n")
+    assert b"Content-Type: image/jpeg" in chunk
+    assert b"Content-Length: 3" in chunk
+    assert chunk.endswith(b"\x01\x02\x03\r\n")
+
+
+@pytest.mark.asyncio
+async def test_camera_stream_generator_yields_a_frame(camera_app: TestClient) -> None:
+    # Drive the StreamingResponse generator directly for one frame, then close
+    # it — consuming the endless stream over HTTP would hang the test client.
+    from backend.main.routes_camera import camera_stream
+
+    resp = await camera_stream()
+    assert "multipart/x-mixed-replace" in resp.media_type
+    agen = resp.body_iterator
+    chunk = await agen.__anext__()
+    await agen.aclose()
+    assert b"--frame" in chunk
+    assert b"image/bmp" in chunk

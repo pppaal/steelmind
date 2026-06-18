@@ -1,0 +1,4 @@
+# Install to drive a real USB/CSI camera (CAMERA=opencv):
+#   pip install -r requirements-camera.txt
+# headless build avoids pulling GUI/Qt deps on a server.
+opencv-python-headless>=4.8,<5.0
