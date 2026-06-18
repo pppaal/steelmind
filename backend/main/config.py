@@ -55,6 +55,11 @@ EFFORT_OVERLOAD_FRAMES = int(os.getenv("EFFORT_OVERLOAD_FRAMES", "3"))
 # scripted callers behave as before; opt in for a staffed teleop session.
 DEADMAN_REQUIRED = os.getenv("DEADMAN_REQUIRED", "0").lower() in ("1", "true", "yes")
 DEADMAN_TIMEOUT_SEC = float(os.getenv("DEADMAN_TIMEOUT_SEC", "1.0"))
+# Replay protection for live WS commands. When enabled (and auth is on, so a
+# per-connection key exists), each command must carry a fresh (ts, nonce, sig).
+# Off by default so the simulator/dev and existing tests are unaffected.
+REQUIRE_SIGNED_COMMANDS = os.getenv("REQUIRE_SIGNED_COMMANDS", "0").lower() in ("1", "true", "yes")
+COMMAND_SKEW_SEC = float(os.getenv("COMMAND_SKEW_SEC", "30.0"))
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
 KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))

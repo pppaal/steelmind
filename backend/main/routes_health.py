@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, Response
 
 from ..auth import auth_enabled, require_viewer
+from .config import REQUIRE_SIGNED_COMMANDS
 from .context import ctx
 
 router = APIRouter()
@@ -25,6 +26,7 @@ async def health() -> dict:
         "ai_history": ctx.ai.history_length(),
         "ai_sessions": ctx.ai.session_count,
         "auth_required": auth_enabled(),
+        "signed_commands": REQUIRE_SIGNED_COMMANDS and auth_enabled(),
         "ready": ctx.ready,
         "time": datetime.now(UTC).isoformat(),
     }

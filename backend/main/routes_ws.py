@@ -7,12 +7,43 @@ import time
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from ..auth import Role, require_token_ws
+from ..auth import Role, auth_enabled, require_token_ws
 from ..models import CommandRequest, StatusEvent
+from ..signing import NonceCache, verify
+from .config import COMMAND_SKEW_SEC, REQUIRE_SIGNED_COMMANDS
 from .context import ctx, require_deadman
 from .motion import _dispatch_command
 
 router = APIRouter()
+
+# Recently-seen command nonces (process-wide) for replay rejection.
+_nonces = NonceCache()
+
+
+def _signature_error(token: str, msg: dict) -> str | None:
+    """Validate a command's (ts, nonce, sig) when signing is enforced. Returns
+    an error string to reject with, or None when the command is acceptable.
+    A no-op unless REQUIRE_SIGNED_COMMANDS and auth (a per-connection key) are
+    both in effect."""
+    if not (REQUIRE_SIGNED_COMMANDS and auth_enabled() and token):
+        return None
+    ts, nonce, sig = msg.get("ts"), msg.get("nonce"), msg.get("sig")
+    if not isinstance(ts, (int, float)) or not nonce or not sig:
+        return "command signature required (ts, nonce, sig)"
+    if abs(time.time() - ts) > COMMAND_SKEW_SEC:
+        return "command timestamp outside allowed skew"
+    payload = msg.get("payload", {}) or {}
+    command = payload.get("command", "")
+    params = payload.get("params", {}) or {}
+    # Pass ts through verbatim (no float() recast) so the canonical string
+    # matches the client byte-for-byte regardless of int/float formatting.
+    if not verify(token, str(sig), command, params, ts, str(nonce)):
+        return "invalid command signature"
+    # Only consume a nonce once the signature is authentic, so a bad frame
+    # can't burn (or pre-seed) a nonce.
+    if _nonces.seen(str(nonce)):
+        return "replay detected (nonce reused)"
+    return None
 
 
 @router.websocket("/ws")
@@ -22,6 +53,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     role = await require_token_ws(ws, min_role=Role.OPERATOR)
     if role is None:
         return
+    token = ws.query_params.get("token", "")
     # require_token_ws didn't close → connection is authorized. Register
     # without re-accepting.
     await ctx.manager.attach(ws)
@@ -36,7 +68,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             except json.JSONDecodeError:
                 await ws.send_text(json.dumps({"type": "error", "detail": "invalid json"}))
                 continue
-            await _handle_ws_message(ws, msg)
+            await _handle_ws_message(ws, msg, token)
     except WebSocketDisconnect:
         pass
     finally:
@@ -44,7 +76,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         await ctx.manager.disconnect(ws)
 
 
-async def _handle_ws_message(ws: WebSocket, msg: dict) -> None:
+async def _handle_ws_message(ws: WebSocket, msg: dict, token: str = "") -> None:
     kind = msg.get("type")
     if kind == "ping":
         await ws.send_text(json.dumps({"type": "pong"}))
@@ -58,6 +90,10 @@ async def _handle_ws_message(ws: WebSocket, msg: dict) -> None:
         ctx.refresh_deadman()
         return
     elif kind == "command":
+        sig_err = _signature_error(token, msg)
+        if sig_err:
+            await ws.send_text(json.dumps({"type": "error", "detail": sig_err}))
+            return
         try:
             require_deadman()
             req = CommandRequest(**msg.get("payload", {}))
