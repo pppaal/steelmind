@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -116,16 +117,27 @@ async def ai_command(req: AICommandRequest, request: Request) -> AICommandRespon
 
     text = text_preview
 
+    # Optionally attach the current camera frame so the AI can ground the
+    # command in what the robot sees. Vision failures degrade gracefully to a
+    # text-only command rather than failing the request.
+    image: tuple[str, str] | None = None
+    if req.use_vision and ctx.camera is not None and ctx.camera.available:
+        try:
+            media_type, data = await ctx.camera.read_vision_frame()
+            image = (media_type, base64.standard_b64encode(data).decode("ascii"))
+        except Exception:
+            logger.exception("vision frame capture failed; proceeding text-only")
+
     session = _session_key(request)
     repaired = False
     started = time.monotonic()
     try:
-        plan = await ctx.ai.translate(text, ctx.state_machine.status, session=session)
+        plan = await ctx.ai.translate(text, ctx.state_machine.status, session=session, image=image)
         ok, error = validate_plan(plan.steps, ctx.state_machine.state)
         if not ok and error:
             logger.info("plan invalid, repairing: %s", error)
             plan = await ctx.ai.translate(
-                text, ctx.state_machine.status, repair_context=error, session=session
+                text, ctx.state_machine.status, repair_context=error, session=session, image=image
             )
             repaired = True
             ctx.metrics.ai_repairs_total += 1

@@ -17,12 +17,28 @@ export default function AICommandInput() {
   const [loading, setLoading] = useState(false);
   const [bubble, setBubble] = useState<Bubble | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cameraAvailable, setCameraAvailable] = useState(false);
+  const [useVision, setUseVision] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiBase = useRef<string>(deriveApiBase());
 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  // Only offer the vision toggle when a camera is actually present.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBase.current}/camera/info`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled) setCameraAvailable(Boolean(d?.available));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -46,7 +62,7 @@ export default function AICommandInput() {
           "X-Session-Id": getSessionId(),
           ...authHeaders(),
         },
-        body: JSON.stringify({ text: value }),
+        body: JSON.stringify({ text: value, use_vision: cameraAvailable && useVision }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -140,6 +156,22 @@ export default function AICommandInput() {
           className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           disabled={loading}
         />
+        {cameraAvailable && (
+          <button
+            type="button"
+            aria-pressed={useVision}
+            title="include the camera view with the command"
+            onClick={() => setUseVision((v) => !v)}
+            disabled={loading}
+            className={`rounded-md border px-2 py-1.5 text-[10px] uppercase tracking-wider transition disabled:opacity-40 ${
+              useVision
+                ? "border-emerald-500 bg-emerald-600/20 text-emerald-300"
+                : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+            }`}
+          >
+            👁 vision
+          </button>
+        )}
         <button
           type="button"
           title="reset conversation memory"

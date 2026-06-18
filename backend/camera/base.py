@@ -41,3 +41,16 @@ class Camera(ABC):
     @abstractmethod
     async def read_frame(self) -> tuple[bytes, str]:
         """Return (data, mime_type) for the most recent frame."""
+
+    async def read_vision_frame(self) -> tuple[str, bytes]:
+        """Return (media_type, data) in a format Claude vision accepts.
+
+        Default: pass the frame through when it's already a supported codec
+        (real drivers return JPEG). Implementations whose snapshot codec isn't
+        vision-compatible (e.g. the mock's BMP) override this."""
+        from .encode import VISION_MEDIA_TYPES
+
+        data, mime = await self.read_frame()
+        if mime in VISION_MEDIA_TYPES:
+            return mime, data
+        raise CameraError(f"frame codec {mime} is not vision-compatible")
