@@ -79,6 +79,9 @@ class AIRoutineRequest(BaseModel):
 
 class AICommandRequest(BaseModel):
     text: str
+    # When true and a camera is configured, the current frame is sent to the
+    # AI so it can ground the command in what the robot sees.
+    use_vision: bool = False
 
 
 class AIPlanStepResult(BaseModel):

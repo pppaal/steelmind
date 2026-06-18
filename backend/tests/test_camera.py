@@ -11,7 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.camera import MockCamera, build_camera
-from backend.camera.base import CameraError
+from backend.camera.base import Camera, CameraError
+from backend.camera.encode import encode_png
 
 
 @pytest.mark.asyncio
@@ -34,6 +35,48 @@ async def test_mock_camera_closed_raises() -> None:
     cam = MockCamera()
     with pytest.raises(CameraError):
         await cam.read_frame()
+
+
+def test_encode_png_is_valid() -> None:
+    png = encode_png(2, 2, bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"  # PNG signature
+    assert png[12:16] == b"IHDR"
+    width, height = struct.unpack(">II", png[16:24])
+    assert (width, height) == (2, 2)
+    assert png[-8:-4] == b"IEND"
+
+
+@pytest.mark.asyncio
+async def test_mock_vision_frame_is_png() -> None:
+    cam = MockCamera(width=160, height=120)
+    await cam.init()
+    media_type, data = await cam.read_vision_frame()
+    assert media_type == "image/png"
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+@pytest.mark.asyncio
+async def test_base_vision_frame_passthrough_and_reject() -> None:
+    class JpegCam(Camera):
+        available = True
+        width = 4
+        height = 4
+
+        async def init(self) -> None: ...
+        async def close(self) -> None: ...
+
+        async def read_frame(self) -> tuple[bytes, str]:
+            return b"\xff\xd8jpeg", "image/jpeg"
+
+    media_type, _data = await JpegCam().read_vision_frame()
+    assert media_type == "image/jpeg"  # already supported → passthrough
+
+    class BmpCam(JpegCam):
+        async def read_frame(self) -> tuple[bytes, str]:
+            return b"BMxx", "image/bmp"
+
+    with pytest.raises(CameraError):
+        await BmpCam().read_vision_frame()  # bmp isn't vision-compatible
 
 
 def test_build_camera_default_is_none(monkeypatch) -> None:
