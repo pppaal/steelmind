@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 from fastapi import WebSocket
 from pydantic import BaseModel
@@ -13,6 +14,9 @@ class ConnectionManager:
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        # Optional synchronous observer of every broadcast payload (e.g. the
+        # session recorder). Set by the app; runs regardless of client count.
+        self.tap: Callable[[BaseModel | dict], None] | None = None
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -29,6 +33,13 @@ class ConnectionManager:
             self._clients.discard(ws)
 
     async def broadcast(self, payload: BaseModel | dict) -> None:
+        # Feed the tap first so events are recorded even with no clients
+        # connected. The tap must be cheap and must not raise into the loop.
+        if self.tap is not None:
+            try:
+                self.tap(payload)
+            except Exception:
+                pass
         if isinstance(payload, BaseModel):
             message = payload.model_dump_json()
         else:
