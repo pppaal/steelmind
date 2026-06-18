@@ -53,6 +53,10 @@ or LeRobot SO-100 servos.
   Per-joint `max_effort: 0` (the default) leaves it inert; tune via
   `EFFORT_PROTECTION` / `EFFORT_OVERLOAD_FRAMES`. Joint load streams over
   `/ws` (`joint_efforts`) and shows as bars in the telemetry panel.
+* **Workspace envelope** (`/workspace`) — the reachable annulus (inner/outer
+  radius) of the planar chain, sampled from joint limits. The operator
+  console caches it to pre-validate reach targets (disables Reach + warns
+  when out of range) before the IK round-trip.
 
 ## Control modes
 

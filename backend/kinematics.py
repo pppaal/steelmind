@@ -45,6 +45,52 @@ class PlanarChain:
             y += link.length * math.sin(theta)
         return x, y
 
+    def workspace(
+        self,
+        limits: dict[str, tuple[float, float]] | None = None,
+        *,
+        max_samples: int = 20000,
+    ) -> dict:
+        """Reachable-workspace envelope as an annulus around the base.
+
+        Samples joint space within `limits` (full ±π when unspecified), runs
+        forward kinematics, and returns the min/max tip distance from the
+        base. `reach` is the theoretical fully-extended span; `outer_radius`
+        is what the joint limits actually allow (≤ reach). The grid density
+        per joint is chosen so the total sample count stays under
+        `max_samples`. The annulus is a fast, necessary pre-check for whether
+        a target is reachable — IK (/reach) remains the authority."""
+        import itertools
+
+        limits = limits or {}
+        n = len(self.links)
+        grid = max(2, int(max_samples ** (1.0 / n))) if n else 1
+        axes: list[list[float]] = []
+        for link in self.links:
+            lo, hi = limits.get(link.joint, (-math.pi, math.pi))
+            if hi <= lo:
+                axes.append([lo])
+            else:
+                step = (hi - lo) / (grid - 1)
+                axes.append([lo + i * step for i in range(grid)])
+
+        inner = math.inf
+        outer = 0.0
+        for combo in itertools.product(*axes):
+            angles = {self.links[i].joint: combo[i] for i in range(n)}
+            x, y = self.forward(angles)
+            d = math.hypot(x - self.base_x, y - self.base_y)
+            inner = min(inner, d)
+            outer = max(outer, d)
+        if inner is math.inf:
+            inner = 0.0
+        return {
+            "base": [self.base_x, self.base_y],
+            "reach": self.reach,
+            "inner_radius": inner,
+            "outer_radius": outer,
+        }
+
     def jacobian(self, angles: dict[str, float]) -> list[tuple[float, float]]:
         """2×N Jacobian as a list of (dx/dθ_i, dy/dθ_i) columns.
 

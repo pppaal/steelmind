@@ -33,6 +33,25 @@ def test_reach_equals_sum_of_links() -> None:
     assert _two_link(0.5, 0.3).reach == 0.8
 
 
+def test_workspace_full_range_is_disc_to_full_reach() -> None:
+    env = _two_link(1.0, 1.0).workspace()
+    assert env["reach"] == 2.0
+    assert env["outer_radius"] == pytest.approx(2.0, abs=1e-6)
+    # Equal links can fold tip back onto the base → inner radius ~0.
+    assert env["inner_radius"] == pytest.approx(0.0, abs=1e-3)
+    assert env["outer_radius"] <= env["reach"] + 1e-9
+
+
+def test_workspace_limits_shrink_the_annulus() -> None:
+    # Pinning the elbow near straight stops the arm folding, so the inner
+    # radius jumps up and the envelope becomes a thin ring near full reach.
+    env = _two_link(1.0, 1.0).workspace(
+        limits={"j1": (-math.pi, math.pi), "j2": (-0.1, 0.1)}
+    )
+    assert env["inner_radius"] > 1.9
+    assert env["outer_radius"] == pytest.approx(2.0, abs=1e-6)
+
+
 @pytest.mark.parametrize(
     "target",
     [(1.5, 0.5), (0.5, 1.2), (-0.8, 0.8), (1.0, -1.0), (0.2, 1.8)],
