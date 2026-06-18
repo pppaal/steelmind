@@ -47,6 +47,12 @@ or LeRobot SO-100 servos.
   the current frame (PNG) to the Claude request so it can ground a command in
   what the robot sees; the console exposes a 👁 vision toggle when a camera is
   present. Degrades gracefully to text-only if capture fails.
+* **Demonstration capture** (`backend/demos.py`) — record labeled episodes
+  (task + success/failure) of joint state at `SENSOR_HZ` and export them in a
+  LeRobotDataset-style schema (`observation.state` / `action` as next-state /
+  `timestamp` / `episode_index` / `next.done`) for imitation learning. Capture
+  is GPU-free; a downstream script converts the JSON to parquet for training.
+  Endpoints: `/demos/start|stop`, `/demos/export`.
 * **Session recording & replay** (`backend/recorder.py`) — taps the broadcast
   stream into a timestamped event timeline (sensor frames skipped); start/stop,
   download as JSON, and **replay** it back over `/ws` (timing-preserving,
@@ -137,6 +143,8 @@ steelmind/
 │   ├── zones.py           Cartesian safety zones / virtual walls
 │   ├── preview.py         trajectory dry-run simulation
 │   ├── recorder.py        session event-timeline recorder
+│   ├── demos.py           imitation-learning demonstration capture
+│   ├── signing.py         command HMAC signing / replay protection
 │   ├── robot_config.py    JSON/YAML joint + chain loader
 │   ├── configs/           sim_humanoid · torso_humanoid · so100_arm
 │   ├── calibration.py     per-joint offset persistence

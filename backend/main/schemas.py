@@ -77,6 +77,15 @@ class AIRoutineRequest(BaseModel):
     run: bool = False
 
 
+class DemoStartRequest(BaseModel):
+    task: str = ""
+
+
+class DemoStopRequest(BaseModel):
+    success: bool
+    notes: str = ""
+
+
 class SimFaultRequest(BaseModel):
     joint: str
     kind: Literal["disturbance", "jam"]

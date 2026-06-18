@@ -49,6 +49,7 @@ from .motion import (
 from .routes_ai import router as _ai_router
 from .routes_camera import router as _camera_router
 from .routes_control import router as _control_router
+from .routes_demos import router as _demos_router
 from .routes_health import router as _health_router
 from .routes_motion import router as _motion_router
 from .routes_recording import router as _recording_router
@@ -84,6 +85,7 @@ for _router in (
     _ai_router,
     _camera_router,
     _recording_router,
+    _demos_router,
     _sim_router,
     _ws_router,
 ):
