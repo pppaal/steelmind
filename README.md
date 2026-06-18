@@ -31,8 +31,10 @@ or LeRobot SO-100 servos.
 * **State machine** — `IDLE / STANDING / WALKING / EXECUTING` with validated
   transitions; subscribers receive `state_transition` events.
 * **Hardware abstraction layer** (`backend/hardware/`) — one `RobotHardware`
-  interface; `mock` (slewing simulator, default), `dynamixel` (protocol-2
-  XL/XM via U2D2), and `lerobot` (SO-100) implementations. Selected by
+  interface; `mock` (kinematic slewing simulator, default), `sim` (a
+  physics-ish model: per-joint PD motor + inertia + gravity, so load/effort
+  and the overload reflex behave realistically without metal), `dynamixel`
+  (protocol-2 XL/XM via U2D2), and `lerobot` (SO-100). Selected by
   `ROBOT_HARDWARE`. The rest of the stack never touches a servo directly.
 * **Camera abstraction layer** (`backend/camera/`) — one `Camera` interface,
   selected by `CAMERA`: `none` (default), `mock` (live dependency-free BMP), or
@@ -125,7 +127,8 @@ steelmind/
 │   ├── plan_validator.py  dry-run AI plans against the transition table
 │   ├── hardware/
 │   │   ├── base.py        RobotHardware ABC + dataclasses
-│   │   ├── mock.py        slewing software simulator (default)
+│   │   ├── mock.py        kinematic slewing simulator (default)
+│   │   ├── sim.py         physics sim (PD motor + inertia + gravity)
 │   │   ├── dynamixel.py   protocol-2 driver (lazy dynamixel-sdk)
 │   │   └── lerobot.py     SO-100 driver (lazy lerobot)
 │   ├── camera/            Camera ABC + mock (BMP) + opencv (JPEG) + factory
@@ -262,7 +265,8 @@ secret convention); the file is read with trailing whitespace stripped.
 | `ANTHROPIC_API_KEY`            | backend  | unset                      | required for `/ai-command`, `/ai-routine`      |
 | `API_TOKEN`                    | backend  | unset                      | legacy single-token mode → operator role       |
 | `API_TOKEN_VIEWER/OPERATOR/ADMIN` | backend | unset                  | comma-sep token lists per role                 |
-| `ROBOT_HARDWARE`               | backend  | `mock`                     | `mock` / `dynamixel` / `lerobot`               |
+| `ROBOT_HARDWARE`               | backend  | `mock`                     | `mock` / `sim` / `dynamixel` / `lerobot`       |
+| `SIM_KP` / `SIM_KD` / `SIM_GRAVITY` | backend | `40` / `12` / `6`       | physics-sim motor gains + gravity scale         |
 | `CAMERA`                       | backend  | `none`                     | `none` / `mock` / `opencv`                      |
 | `CAMERA_DEVICE`                | backend  | `0`                        | opencv device index or path                     |
 | `CAMERA_WIDTH` / `CAMERA_HEIGHT` | backend | `160` / `120`            | requested camera frame size                     |

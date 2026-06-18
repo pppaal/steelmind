@@ -37,6 +37,11 @@ def build_hardware(joints: list[JointSpec]) -> RobotHardware:
     port = os.getenv("ROBOT_HARDWARE_PORT", "/dev/ttyUSB0")
     if backend == "mock":
         return MockHardware(joints)
+    if backend == "sim":
+        from .sim import PhysicsSim
+
+        logger.info("hardware: physics sim (gravity + dynamics)")
+        return PhysicsSim(joints)
     if backend == "dynamixel":
         from .dynamixel import DynamixelHardware
 
