@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import AICommandInput from "@/components/AICommandInput";
+import CameraPanel from "@/components/CameraPanel";
 import CommandBar from "@/components/CommandBar";
 import DeadmanButton from "@/components/DeadmanButton";
 import EventLog from "@/components/EventLog";
@@ -72,6 +73,7 @@ export default function Page() {
             drag · zoom · {connection}
           </div>
           <KeyboardShortcuts enabled={connection === "open"} onCommand={sendCommand} />
+          <CameraPanel apiBase={apiBase} />
           <EventLog entries={log} />
         </div>
         <HardwarePanel

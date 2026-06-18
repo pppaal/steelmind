@@ -34,6 +34,10 @@ or LeRobot SO-100 servos.
   interface; `mock` (slewing simulator, default), `dynamixel` (protocol-2
   XL/XM via U2D2), and `lerobot` (SO-100) implementations. Selected by
   `ROBOT_HARDWARE`. The rest of the stack never touches a servo directly.
+* **Camera abstraction layer** (`backend/camera/`) — one `Camera` interface,
+  selected by `CAMERA` (`none` default, or `mock`, which renders a live
+  dependency-free BMP). Served at `/camera/snapshot`; the console shows a
+  live panel when a camera is present. (Real OpenCV/USB drivers plug in here.)
 * **Trajectory engine** (`backend/trajectory.py`) — `hold / linear /
   min_jerk / sinusoid / compose`. Behaviors, keyframe replay, IK reach, and
   routines all play through one trajectory player at `SENSOR_HZ`.
@@ -114,6 +118,9 @@ steelmind/
 │   │   ├── mock.py        slewing software simulator (default)
 │   │   ├── dynamixel.py   protocol-2 driver (lazy dynamixel-sdk)
 │   │   └── lerobot.py     SO-100 driver (lazy lerobot)
+│   ├── camera/            Camera ABC + mock (synthetic BMP) + factory
+│   ├── zones.py           Cartesian safety zones / virtual walls
+│   ├── preview.py         trajectory dry-run simulation
 │   ├── robot_config.py    JSON/YAML joint + chain loader
 │   ├── configs/           sim_humanoid · torso_humanoid · so100_arm
 │   ├── calibration.py     per-joint offset persistence
@@ -245,6 +252,8 @@ secret convention); the file is read with trailing whitespace stripped.
 | `API_TOKEN`                    | backend  | unset                      | legacy single-token mode → operator role       |
 | `API_TOKEN_VIEWER/OPERATOR/ADMIN` | backend | unset                  | comma-sep token lists per role                 |
 | `ROBOT_HARDWARE`               | backend  | `mock`                     | `mock` / `dynamixel` / `lerobot`               |
+| `CAMERA`                       | backend  | `none`                     | `none` / `mock` (synthetic BMP feed)           |
+| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | backend | `160` / `120`            | mock camera frame size                          |
 | `ROBOT_HARDWARE_PORT`          | backend  | `/dev/ttyUSB0`             | serial port for real drivers                   |
 | `ROBOT_HARDWARE_BAUD`          | backend  | `1000000`                  | dynamixel baud rate                            |
 | `ROBOT_CONFIG`                 | backend  | `backend/configs/sim_humanoid.json` | joint + chain config              |
