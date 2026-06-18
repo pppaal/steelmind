@@ -77,6 +77,12 @@ class AIRoutineRequest(BaseModel):
     run: bool = False
 
 
+class ReplayRequest(BaseModel):
+    speed: float = 1.0
+    # Timeline to replay; when omitted the current in-memory recording is used.
+    events: list[dict] | None = None
+
+
 class AICommandRequest(BaseModel):
     text: str
     # When true and a camera is configured, the current frame is sent to the

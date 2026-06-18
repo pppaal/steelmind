@@ -42,10 +42,11 @@ or LeRobot SO-100 servos.
   the current frame (PNG) to the Claude request so it can ground a command in
   what the robot sees; the console exposes a 👁 vision toggle when a camera is
   present. Degrades gracefully to text-only if capture fails.
-* **Session recording** (`backend/recorder.py`) — taps the broadcast stream
-  into a timestamped event timeline (sensor frames skipped). Start/stop and
-  download as JSON from the console for audit / time-travel debugging via
-  `/recording/start|stop` and `/recording/export`.
+* **Session recording & replay** (`backend/recorder.py`) — taps the broadcast
+  stream into a timestamped event timeline (sensor frames skipped); start/stop,
+  download as JSON, and **replay** it back over `/ws` (timing-preserving,
+  speed-scaled, frames tagged `replay`) from the console. Endpoints:
+  `/recording/start|stop`, `/recording/export`, `/recording/replay`.
 * **Trajectory engine** (`backend/trajectory.py`) — `hold / linear /
   min_jerk / sinusoid / compose`. Behaviors, keyframe replay, IK reach, and
   routines all play through one trajectory player at `SENSOR_HZ`.
