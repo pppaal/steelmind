@@ -37,6 +37,11 @@ export default function HardwarePanel({
   const [hasChain, setHasChain] = useState(false);
   const [reachTarget, setReachTarget] = useState({ x: "0.15", y: "0.10" });
   const [fk, setFk] = useState<{ x: number; y: number } | null>(null);
+  const [workspace, setWorkspace] = useState<{
+    base: [number, number];
+    inner_radius: number;
+    outer_radius: number;
+  } | null>(null);
   const [routines, setRoutines] = useState<string[]>([]);
   const [behaviors, setBehaviors] = useState<string[]>([]);
   const [aiEnabled, setAiEnabled] = useState(false);
@@ -84,6 +89,26 @@ export default function HardwarePanel({
     }
   }, [apiBase]);
 
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/workspace`, { headers: authHeaders() });
+      if (!res.ok) {
+        setWorkspace(null);
+        return;
+      }
+      const d = await res.json();
+      if (
+        Array.isArray(d.base) &&
+        typeof d.inner_radius === "number" &&
+        typeof d.outer_radius === "number"
+      ) {
+        setWorkspace({ base: [d.base[0], d.base[1]], inner_radius: d.inner_radius, outer_radius: d.outer_radius });
+      }
+    } catch {
+      setWorkspace(null);
+    }
+  }, [apiBase]);
+
   const refreshRoutines = useCallback(async () => {
     try {
       const res = await fetch(`${apiBase}/routines`, { headers: authHeaders() });
@@ -98,6 +123,7 @@ export default function HardwarePanel({
   useEffect(() => {
     void refreshKeyframes();
     void refreshFk();
+    void refreshWorkspace();
     void refreshRoutines();
     fetch(`${apiBase}/behaviors`)
       .then((r) => (r.ok ? r.json() : null))
@@ -109,7 +135,7 @@ export default function HardwarePanel({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setAiEnabled(Boolean(d?.ai_enabled)))
       .catch(() => {});
-  }, [apiBase, refreshKeyframes, refreshFk, refreshRoutines]);
+  }, [apiBase, refreshKeyframes, refreshFk, refreshWorkspace, refreshRoutines]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -260,6 +286,21 @@ export default function HardwarePanel({
       setTimeout(() => void refreshFk(), 600);
     });
 
+  // Client-side reach pre-check against the cached workspace annulus. A fast
+  // hint so the operator sees an out-of-range target before sending it; the
+  // server's IK stays the authority (it still moves to the closest pose).
+  const reachCheck = (() => {
+    if (!workspace) return null;
+    const x = parseFloat(reachTarget.x);
+    const y = parseFloat(reachTarget.y);
+    if (Number.isNaN(x) || Number.isNaN(y)) return null;
+    const d = Math.hypot(x - workspace.base[0], y - workspace.base[1]);
+    const eps = 1e-6;
+    if (d > workspace.outer_radius + eps) return { ok: false, msg: "beyond reach" };
+    if (d < workspace.inner_radius - eps) return { ok: false, msg: "too close to base" };
+    return { ok: true, msg: "" };
+  })();
+
   return (
     <div className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l border-zinc-800 bg-zinc-950/80 p-4">
       <div className="flex items-center justify-between">
@@ -340,6 +381,11 @@ export default function HardwarePanel({
                 tip: ({fk.x.toFixed(3)}, {fk.y.toFixed(3)}) m
               </div>
             )}
+            {workspace && (
+              <div className="font-mono text-[10px] text-zinc-600">
+                reach: {workspace.inner_radius.toFixed(3)}–{workspace.outer_radius.toFixed(3)} m
+              </div>
+            )}
             <div className="flex items-center gap-1">
               <label className="font-mono text-[10px] text-zinc-500">x</label>
               <input
@@ -355,12 +401,15 @@ export default function HardwarePanel({
               />
               <button
                 onClick={doReach}
-                disabled={busy || estopped}
+                disabled={busy || estopped || reachCheck?.ok === false}
                 className="ml-auto rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
               >
                 Reach
               </button>
             </div>
+            {reachCheck?.ok === false && (
+              <div className="text-[10px] text-amber-400">target {reachCheck.msg}</div>
+            )}
           </div>
         </div>
       )}

@@ -60,3 +60,15 @@ def test_reach_unreachable_reports_false(so100_app: TestClient) -> None:
     r = so100_app.post("/reach", json={"x": 5.0, "y": 5.0})
     assert r.status_code == 200
     assert r.json()["reached"] is False
+
+
+def test_workspace_without_chain_returns_400(fresh_app: TestClient) -> None:
+    assert fresh_app.get("/workspace").status_code == 400
+
+
+def test_workspace_reports_envelope(so100_app: TestClient) -> None:
+    body = so100_app.get("/workspace").json()
+    assert set(body) >= {"base", "reach", "inner_radius", "outer_radius"}
+    assert 0.0 <= body["inner_radius"] <= body["outer_radius"] <= body["reach"] + 1e-9
+    # A reachable target sits inside the annulus; a far one is outside it.
+    assert body["outer_radius"] < 5.0

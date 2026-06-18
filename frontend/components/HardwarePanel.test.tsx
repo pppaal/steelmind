@@ -170,6 +170,27 @@ describe("HardwarePanel", () => {
     expect(reach.body).toMatchObject({ x: 0.15, y: 0.1 });
   });
 
+  it("warns and blocks Reach when the target is outside the workspace annulus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url) => {
+        if (url.endsWith("/fk")) return { x: 0.2, y: 0.1, reach: 0.32 };
+        if (url.endsWith("/workspace"))
+          return { base: [0, 0], inner_radius: 0.05, outer_radius: 0.3, reach: 0.32 };
+        return { keyframes: {} };
+      }),
+    );
+    render(<HardwarePanel apiBase="http://x" jointNames={["shoulder_lift"]} />);
+    // Default target (0.15, 0.10) is inside → Reach enabled.
+    const btn = await screen.findByRole("button", { name: "Reach" });
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    // Push x far beyond the outer radius → blocked with a warning.
+    const xInput = screen.getByDisplayValue("0.15");
+    fireEvent.change(xInput, { target: { value: "5" } });
+    await waitFor(() => expect(screen.getByText(/beyond reach/i)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Reach" })).toBeDisabled();
+  });
+
   it("imports a routine file via PUT", async () => {
     const calls: { url: string; method?: string; body: unknown }[] = [];
     vi.stubGlobal(

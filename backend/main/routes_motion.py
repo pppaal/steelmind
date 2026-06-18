@@ -72,6 +72,17 @@ async def forward_kinematics() -> dict:
     return {"x": x, "y": y, "reach": ctx.chain.reach}
 
 
+@router.get("/workspace", dependencies=[Depends(require_viewer)])
+async def workspace() -> dict:
+    """Reachable-workspace envelope (annulus) for the planar chain, so a
+    client can pre-validate reach targets without a round-trip per keystroke.
+    400 if this robot config has no chain."""
+    if ctx.chain is None:
+        raise HTTPException(status_code=400, detail="no kinematic chain configured")
+    limits = {j.name: (j.lower_limit, j.upper_limit) for j in ctx.joints}
+    return ctx.chain.workspace(limits)
+
+
 @router.post("/reach", dependencies=[Depends(require_operator)])
 async def reach(req: ReachRequest) -> dict:
     """Solve IK for a target (x, y) and move the chain there as a smooth
