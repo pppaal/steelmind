@@ -80,3 +80,10 @@ def camera_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Boot the app with the mock camera enabled."""
     with boot_app(monkeypatch, CAMERA="mock") as client:
         yield client
+
+
+@pytest.fixture()
+def sim_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Boot the app on the physics simulation hardware backend."""
+    with boot_app(monkeypatch, ROBOT_HARDWARE="sim") as client:
+        yield client
