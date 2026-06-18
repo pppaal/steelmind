@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from ..auth import Role, require_token_ws
 from ..models import CommandRequest, StatusEvent
-from .context import ctx
+from .context import ctx, require_deadman
 from .motion import _dispatch_command
 
 router = APIRouter()
@@ -52,8 +52,14 @@ async def _handle_ws_message(ws: WebSocket, msg: dict) -> None:
         # Client-side heartbeat echo. last_seen is already updated by the
         # outer receive loop, so we don't need to send anything back.
         return
+    elif kind == "deadman":
+        # Hold-to-enable ping: the operator is actively holding the enable
+        # control. Refreshes the deadman deadline so motion stays permitted.
+        ctx.refresh_deadman()
+        return
     elif kind == "command":
         try:
+            require_deadman()
             req = CommandRequest(**msg.get("payload", {}))
             resp = await _dispatch_command(req)
             await ws.send_text(resp.model_dump_json())

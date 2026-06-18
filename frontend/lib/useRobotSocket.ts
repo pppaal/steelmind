@@ -25,6 +25,7 @@ export interface RobotSocket {
   lastReason: string | null;
   routine: RoutineProgress | null;
   sendCommand: (command: string, params?: Record<string, unknown>) => void;
+  sendDeadman: () => void;
 }
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
@@ -117,6 +118,15 @@ export function useRobotSocket(): RobotSocket {
     [],
   );
 
+  // Deadman / hold-to-enable ping. The caller sends these repeatedly while the
+  // operator holds the enable control; the server keeps motion armed only as
+  // long as they keep arriving.
+  const sendDeadman = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "deadman" }));
+  }, []);
+
   return {
     connection,
     status: state.status,
@@ -126,5 +136,6 @@ export function useRobotSocket(): RobotSocket {
     lastReason: state.lastReason,
     routine: state.routine,
     sendCommand,
+    sendDeadman,
   };
 }

@@ -48,6 +48,13 @@ HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
 # sets max_effort > 0, so the default robot configs are unaffected.
 EFFORT_PROTECTION = os.getenv("EFFORT_PROTECTION", "1").lower() in ("1", "true", "yes")
 EFFORT_OVERLOAD_FRAMES = int(os.getenv("EFFORT_OVERLOAD_FRAMES", "3"))
+# Deadman / hold-to-enable. When required, motion endpoints reject unless the
+# operator is actively holding the enable control (the UI pings {type:deadman}
+# over /ws while held), and an active motion is frozen if the hold lapses for
+# longer than DEADMAN_TIMEOUT_SEC. Off by default so the simulator/demo and
+# scripted callers behave as before; opt in for a staffed teleop session.
+DEADMAN_REQUIRED = os.getenv("DEADMAN_REQUIRED", "0").lower() in ("1", "true", "yes")
+DEADMAN_TIMEOUT_SEC = float(os.getenv("DEADMAN_TIMEOUT_SEC", "1.0"))
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
 KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))
