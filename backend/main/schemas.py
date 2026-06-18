@@ -77,6 +77,12 @@ class AIRoutineRequest(BaseModel):
     run: bool = False
 
 
+class SimFaultRequest(BaseModel):
+    joint: str
+    kind: Literal["disturbance", "jam"]
+    value: float = 0.0
+
+
 class ReplayRequest(BaseModel):
     speed: float = 1.0
     # Timeline to replay; when omitted the current in-memory recording is used.
