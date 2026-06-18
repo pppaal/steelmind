@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
@@ -12,6 +12,11 @@ from .models import RobotStatus
 
 MAX_HISTORY_TURNS = 4
 MAX_USER_INPUT_LEN = 500
+# Cap the number of distinct conversation sessions kept in memory. Each unique
+# session key (e.g. a per-browser UUID) would otherwise leak a deque forever;
+# rotating clients could grow this unbounded. Least-recently-used sessions are
+# evicted past this cap — they just lose conversation context, not safety.
+MAX_SESSIONS = 512
 
 logger = logging.getLogger("steelmind.ai")
 
@@ -179,14 +184,22 @@ class AICommander:
         self._routine_system_prompt = ROUTINE_SYSTEM_PROMPT.format(behaviors=behaviors_block)
         # Per-session conversation memory. Each session key (e.g. a browser-
         # generated UUID forwarded via X-Session-Id) gets its own bounded
-        # deque so concurrent users don't poison each other's intent.
-        self._history: dict[str, deque[tuple[str, dict[str, Any]]]] = {}
+        # deque so concurrent users don't poison each other's intent. An
+        # OrderedDict bounds the number of sessions (LRU eviction) so rotating
+        # clients can't grow memory without limit.
+        self._history: OrderedDict[str, deque[tuple[str, dict[str, Any]]]] = OrderedDict()
 
     def _bucket(self, session: str) -> deque[tuple[str, dict[str, Any]]]:
         bucket = self._history.get(session)
         if bucket is None:
             bucket = deque(maxlen=MAX_HISTORY_TURNS)
             self._history[session] = bucket
+            # Evict the least-recently-used session(s) past the cap.
+            while len(self._history) > MAX_SESSIONS:
+                self._history.popitem(last=False)
+        else:
+            # Touch: mark this session as most-recently-used.
+            self._history.move_to_end(session)
         return bucket
 
     def reset_history(self, session: str | None = None) -> None:

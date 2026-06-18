@@ -50,8 +50,15 @@ export function useRobotSocket(): RobotSocket {
     const ws = new WebSocket(wsUrlWithToken());
     wsRef.current = ws;
 
-    ws.onopen = () => setConnection("open");
+    // Guard every handler with an identity check: if wsRef no longer points at
+    // this socket, it's been superseded (token change / StrictMode remount) or
+    // the hook unmounted. Without this, a closing old socket would setState on
+    // an unmounted component and schedule a reconnect that leaks a live socket.
+    ws.onopen = () => {
+      if (wsRef.current === ws) setConnection("open");
+    };
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       setConnection("closed");
       reconnectRef.current = setTimeout(connect, 1500);
     };
@@ -93,7 +100,11 @@ export function useRobotSocket(): RobotSocket {
     return () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       window.removeEventListener("storage", onStorage);
-      wsRef.current?.close();
+      // Null the ref first so the socket's onclose identity check bails out
+      // instead of scheduling a reconnect after teardown.
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws?.close();
     };
   }, [connect]);
 
