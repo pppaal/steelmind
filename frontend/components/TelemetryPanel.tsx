@@ -116,6 +116,32 @@ export default function TelemetryPanel({ connection, status, sensor, history, la
           : <div className="text-xs text-zinc-500">—</div>}
       </Section>
 
+      {sensor?.joint_efforts && Object.keys(sensor.joint_efforts).length > 0 && (
+        <Section title="Joint Load (effort)">
+          {(() => {
+            const efforts = sensor.joint_efforts!;
+            const peak = Math.max(0.001, ...Object.values(efforts).filter(Number.isFinite));
+            return Object.entries(efforts).map(([k, v]) => {
+              const frac = Math.max(0, Math.min(1, (Number.isFinite(v) ? v : 0) / peak));
+              return (
+                <div key={k} className="flex items-center gap-2 py-0.5">
+                  <span className="w-28 shrink-0 truncate text-xs text-zinc-400">{k}</span>
+                  <div className="h-1.5 flex-1 rounded bg-zinc-800">
+                    <div
+                      className="h-full rounded bg-amber-400"
+                      style={{ width: `${frac * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-12 shrink-0 text-right font-mono text-[10px] text-zinc-500">
+                    {fmt(v, 2)}
+                  </span>
+                </div>
+              );
+            });
+          })()}
+        </Section>
+      )}
+
       <Section title="Battery">
         <Row label="voltage" value={`${fmt(sensor?.battery_voltage, 2)} V`} />
         <Row label="percent" value={`${fmt(sensor?.battery_percent, 1)} %`} />

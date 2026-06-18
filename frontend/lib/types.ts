@@ -21,6 +21,7 @@ export interface SensorData {
   imu_linear_acceleration: Vector3;
   joint_positions: Record<string, number>;
   joint_velocities: Record<string, number>;
+  joint_efforts?: Record<string, number>;
   battery_voltage: number;
   battery_percent: number;
 }

@@ -42,6 +42,12 @@ WS_HEARTBEAT_TIMEOUT_SEC = float(os.getenv("WS_HEARTBEAT_TIMEOUT_SEC", "60"))
 AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "20"))
 ROBOT_CONFIG = os.getenv("ROBOT_CONFIG", "backend/configs/sim_humanoid.json")
 HARDWARE_WATCHDOG_SEC = float(os.getenv("HARDWARE_WATCHDOG_SEC", "2.0"))
+# Overload protection: trip a protective stop when a joint reports effort above
+# its config max_effort for this many consecutive sensor frames. Off entirely
+# when EFFORT_PROTECTION is false; per-joint it's also inert unless that joint
+# sets max_effort > 0, so the default robot configs are unaffected.
+EFFORT_PROTECTION = os.getenv("EFFORT_PROTECTION", "1").lower() in ("1", "true", "yes")
+EFFORT_OVERLOAD_FRAMES = int(os.getenv("EFFORT_OVERLOAD_FRAMES", "3"))
 CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
 KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))

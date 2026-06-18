@@ -106,3 +106,32 @@ async def test_disable_freezes_positions() -> None:
     # Disabled motors don't move toward target.
     assert abs(p2 - p1) < 0.01
     _ = time
+
+
+@pytest.mark.asyncio
+async def test_effort_rises_with_tracking_error_and_is_zero_at_rest() -> None:
+    hw = _hw()
+    await hw.init()
+    await hw.enable()
+    # Far target → large tracking error → non-zero effort while catching up.
+    await hw.write({"b": 3.0})
+    await hw.read()  # baseline clock
+    moving = (await hw.read()).joints["b"].effort
+    assert moving > 0.0
+    # Let it settle onto the (clamped) target, then effort decays toward zero.
+    for _ in range(40):
+        await asyncio.sleep(0.02)
+        snap = await hw.read()
+    assert snap.joints["b"].effort < moving
+    assert snap.joints["b"].effort < 0.05
+
+
+@pytest.mark.asyncio
+async def test_effort_zero_when_estopped() -> None:
+    hw = _hw()
+    await hw.init()
+    await hw.enable()
+    await hw.write({"b": 3.0})
+    await hw.estop()
+    snap = await hw.read()
+    assert all(js.effort == 0.0 for js in snap.joints.values())
