@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import require_admin, require_operator, require_viewer
 from ..behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
-from ..models import CommandRequest, CommandResponse, RobotState
+from ..models import CommandRequest, CommandResponse
 from ..robot_config import load_config
 from .config import MAX_JOG_RAD, ROBOT_CONFIG
 from .context import _apply_calibration, ctx, require_deadman
@@ -21,15 +21,7 @@ async def estop() -> dict:
     """Latching emergency stop. Cancels any active behavior/routine,
     force-transitions to IDLE, and cuts torque via the hardware. Subsequent
     writes are silently dropped until /estop/clear runs."""
-    if ctx.routine_task and not ctx.routine_task.done():
-        ctx.routine_task.cancel()
-    if ctx.current_behavior_task and not ctx.current_behavior_task.done():
-        ctx.current_behavior_task.cancel()
-    if ctx.hardware:
-        await ctx.hardware.estop()
-    await ctx.state_machine.transition(RobotState.IDLE, reason="estop", force=True)
-    await ctx.state_machine.set_behavior(None)
-    await ctx.state_machine.set_error("estop latched")
+    await ctx.latched_stop("estop latched")
     return {"ok": True, "estopped": True}
 
 

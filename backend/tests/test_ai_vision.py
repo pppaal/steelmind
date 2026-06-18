@@ -1,10 +1,6 @@
 """Vision grounding: a camera frame passed to AICommander.translate is sent
 to the model as an image block, and /ai-command?use_vision wires it up."""
 
-import importlib
-import os
-import sys
-import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -54,36 +50,13 @@ async def test_translate_without_image_keeps_text_content() -> None:
     assert isinstance(create.call_args.kwargs["messages"][-1]["content"], str)
 
 
-@pytest.fixture()
-def vision_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    fd, db = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    monkeypatch.setenv("JOURNAL_DB", db)
-    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE", "ROUTINES_FILE"):
-        f, p = tempfile.mkstemp(suffix=".json")
-        os.close(f)
-        os.unlink(p)
-        monkeypatch.setenv(var, p)
-    monkeypatch.setenv("CAMERA", "mock")
-    for name in list(sys.modules):
-        if name == "backend.main" or name.startswith("backend.main."):
-            del sys.modules[name]
-    main = importlib.import_module("backend.main")
-    with TestClient(main.app) as client:
-        yield client
-    try:
-        os.unlink(db)
-    except OSError:
-        pass
-
-
-def test_ai_command_use_vision_attaches_frame(vision_app: TestClient) -> None:
+def test_ai_command_use_vision_attaches_frame(camera_app: TestClient) -> None:
     import backend.main as main
 
     create = AsyncMock(return_value=_plan_response())
     main.ctx.ai._client = SimpleNamespace(messages=SimpleNamespace(create=create))
 
-    r = vision_app.post("/ai-command", json={"text": "stand", "use_vision": True})
+    r = camera_app.post("/ai-command", json={"text": "stand", "use_vision": True})
     assert r.status_code == 200
     content = create.call_args.kwargs["messages"][-1]["content"]
     img = next(b for b in content if b["type"] == "image")

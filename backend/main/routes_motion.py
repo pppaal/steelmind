@@ -15,6 +15,16 @@ from .schemas import KeyframePlayRequest, ReachRequest
 router = APIRouter()
 
 
+def _enforce_zone(traj) -> None:
+    """Reject (422) a motion whose tip path would cross a virtual wall.
+    No-op when the config defines no chain or no safety zone."""
+    if ctx.chain is None or ctx.safety_zone is None:
+        return
+    wall = trajectory_zone_violation(traj, ctx.chain, ctx.safety_zone, hz=SENSOR_HZ)
+    if wall:
+        raise HTTPException(status_code=422, detail=f"motion blocked by safety zone: {wall}")
+
+
 @router.get("/keyframes", dependencies=[Depends(require_viewer)])
 async def list_keyframes() -> dict:
     return {"keyframes": ctx.keyframes.all()}
@@ -42,10 +52,7 @@ async def play_keyframes(req: KeyframePlayRequest) -> dict:
             "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain, zone=ctx.safety_zone),
         }
     require_deadman()
-    if ctx.chain is not None and ctx.safety_zone is not None:
-        wall = trajectory_zone_violation(traj, ctx.chain, ctx.safety_zone, hz=SENSOR_HZ)
-        if wall:
-            raise HTTPException(status_code=422, detail=f"motion blocked by safety zone: {wall}")
+    _enforce_zone(traj)
     await _play(f"keyframes:{'+'.join(req.names)}", traj)
     return {"ok": True, "names": req.names, "duration": traj.duration}
 
@@ -127,10 +134,7 @@ async def reach(req: ReachRequest) -> dict:
             "preview": simulate_trajectory(traj, specs, hz=SENSOR_HZ, chain=ctx.chain, zone=ctx.safety_zone),
         }
     require_deadman()
-    if ctx.safety_zone is not None:
-        wall = trajectory_zone_violation(traj, ctx.chain, ctx.safety_zone, hz=SENSOR_HZ)
-        if wall:
-            raise HTTPException(status_code=422, detail=f"motion blocked by safety zone: {wall}")
+    _enforce_zone(traj)
     await _play(f"reach:({req.x:.2f},{req.y:.2f})", traj)
     return {
         "ok": True,

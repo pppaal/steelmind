@@ -1,7 +1,9 @@
+import contextlib
 import importlib
 import os
 import sys
 import tempfile
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,60 +28,55 @@ os.unlink(_RT_PATH)
 os.environ.setdefault("ROUTINES_FILE", _RT_PATH)
 
 
-@pytest.fixture()
-def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Return a TestClient against a freshly-imported backend.main, with
-    per-test temp files for every persisted store and a clean state
-    machine. Tests that previously shared the module-level `ctx` (and so
-    leaked state across the suite) should use this, not `client`."""
-    fd, path = tempfile.mkstemp(prefix="steelmind-fresh-", suffix=".db")
+@contextlib.contextmanager
+def boot_app(monkeypatch: pytest.MonkeyPatch, **env: str) -> Iterator[TestClient]:
+    """Boot a TestClient against a freshly-imported backend.main with per-test
+    temp files for every persisted store, plus any extra env overrides. The
+    module cache is dropped first so import-time globals (ctx, config,
+    logging handlers) rebind against the new env."""
+    temp_paths: list[str] = []
+    fd, db = tempfile.mkstemp(prefix="steelmind-test-", suffix=".db")
     os.close(fd)
-    monkeypatch.setenv("JOURNAL_DB", path)
-    temp_paths = [path]
-    for var, prefix in (
-        ("CALIBRATION_FILE", "steelmind-fresh-cal-"),
-        ("KEYFRAMES_FILE", "steelmind-fresh-kf-"),
-        ("ROUTINES_FILE", "steelmind-fresh-rt-"),
-    ):
-        f, p = tempfile.mkstemp(prefix=prefix, suffix=".json")
+    monkeypatch.setenv("JOURNAL_DB", db)
+    temp_paths.append(db)
+    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE", "ROUTINES_FILE"):
+        f, p = tempfile.mkstemp(prefix="steelmind-test-", suffix=".json")
         os.close(f)
         os.unlink(p)
         monkeypatch.setenv(var, p)
         temp_paths.append(p)
-    # Drop the cached module so import-time globals (ctx, configure_logging
-    # handlers) rebind against the new env.
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     for name in list(sys.modules):
         if name == "backend.main" or name.startswith("backend.main."):
             del sys.modules[name]
     main = importlib.import_module("backend.main")
-    with TestClient(main.app) as client:
-        yield client
-    for p in temp_paths:
-        try:
-            os.unlink(p)
-        except OSError:
-            pass
+    try:
+        with TestClient(main.app) as client:
+            yield client
+    finally:
+        for p in temp_paths:
+            with contextlib.suppress(OSError):
+                os.unlink(p)
 
 
 @pytest.fixture()
-def so100_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Boot the app against the SO-100 config, which has a planar chain."""
-    fd, db = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    monkeypatch.setenv("JOURNAL_DB", db)
-    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE", "ROUTINES_FILE"):
-        f, p = tempfile.mkstemp(suffix=".json")
-        os.close(f)
-        os.unlink(p)
-        monkeypatch.setenv(var, p)
-    monkeypatch.setenv("ROBOT_CONFIG", "backend/configs/so100_arm.json")
-    for name in list(sys.modules):
-        if name == "backend.main" or name.startswith("backend.main."):
-            del sys.modules[name]
-    main = importlib.import_module("backend.main")
-    with TestClient(main.app) as client:
+def fresh_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """A TestClient against a fresh backend.main with the default sim config —
+    isolated per-test state, no leakage through the module-level ctx."""
+    with boot_app(monkeypatch) as client:
         yield client
-    try:
-        os.unlink(db)
-    except OSError:
-        pass
+
+
+@pytest.fixture()
+def so100_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Boot the app against the SO-100 config, which has a planar chain."""
+    with boot_app(monkeypatch, ROBOT_CONFIG="backend/configs/so100_arm.json") as client:
+        yield client
+
+
+@pytest.fixture()
+def camera_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Boot the app with the mock camera enabled."""
+    with boot_app(monkeypatch, CAMERA="mock") as client:
+        yield client

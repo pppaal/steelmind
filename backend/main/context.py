@@ -310,22 +310,33 @@ class AppContext:
         if tripped:
             await self.protective_stop(f"overload: {', '.join(sorted(tripped))}")
 
-    async def protective_stop(self, reason: str) -> None:
-        """Latching, hardware-level stop triggered by a safety reflex (e.g.
-        overload). Mirrors the operator E-stop: cancels motion, cuts torque,
-        drops to IDLE, and latches an error that requires /estop/clear."""
-        logger.warning("protective stop: %s", reason)
-        self.metrics.overload_stops_total += 1
-        self._overload_counts.clear()
+    def _cancel_motion_tasks(self) -> None:
+        """Cancel any running routine / behavior task. Shared by every stop
+        path (E-stop, overload protective stop, deadman freeze)."""
         if self.routine_task and not self.routine_task.done():
             self.routine_task.cancel()
         if self.current_behavior_task and not self.current_behavior_task.done():
             self.current_behavior_task.cancel()
+
+    async def latched_stop(self, reason: str) -> None:
+        """Cancel motion, cut torque, drop to IDLE, and latch `reason` as the
+        error (cleared via /estop/clear). Shared by the operator E-stop and the
+        overload protective stop."""
+        self._cancel_motion_tasks()
         if self.hardware:
             await self.hardware.estop()
         await self.state_machine.transition(RobotState.IDLE, reason=reason, force=True)
         await self.state_machine.set_behavior(None)
         await self.state_machine.set_error(reason)
+
+    async def protective_stop(self, reason: str) -> None:
+        """Latching, hardware-level stop triggered by a safety reflex (e.g.
+        overload). Mirrors the operator E-stop and latches an error that
+        requires /estop/clear."""
+        logger.warning("protective stop: %s", reason)
+        self.metrics.overload_stops_total += 1
+        self._overload_counts.clear()
+        await self.latched_stop(reason)
 
     # --- Deadman / hold-to-enable -------------------------------------------
     def refresh_deadman(self) -> None:
@@ -356,10 +367,7 @@ class AppContext:
             return
         logger.warning("deadman released — freezing motion")
         self.metrics.deadman_stops_total += 1
-        if self.routine_task and not self.routine_task.done():
-            self.routine_task.cancel()
-        if self.current_behavior_task and not self.current_behavior_task.done():
-            self.current_behavior_task.cancel()
+        self._cancel_motion_tasks()
 
     async def _transition_loop(self) -> None:
         queue = self.state_machine.subscribe()
