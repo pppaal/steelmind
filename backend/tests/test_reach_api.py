@@ -1,12 +1,7 @@
 """/fk and /reach endpoints. The default sim config has no chain (→ 400);
-a fixture booting the SO-100 config exercises the real IK→trajectory path."""
+the shared `so100_app` fixture (conftest) boots the SO-100 config to exercise
+the real IK→trajectory path."""
 
-import importlib
-import os
-import sys
-import tempfile
-
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -14,30 +9,6 @@ def test_reach_without_chain_returns_400(fresh_app: TestClient) -> None:
     # sim_humanoid (the fresh_app default) ships no kinematic chain.
     assert fresh_app.post("/reach", json={"x": 0.1, "y": 0.1}).status_code == 400
     assert fresh_app.get("/fk").status_code == 400
-
-
-@pytest.fixture()
-def so100_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Boot the app against the SO-100 config, which has a planar chain."""
-    fd, db = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    monkeypatch.setenv("JOURNAL_DB", db)
-    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE"):
-        f, p = tempfile.mkstemp(suffix=".json")
-        os.close(f)
-        os.unlink(p)
-        monkeypatch.setenv(var, p)
-    monkeypatch.setenv("ROBOT_CONFIG", "backend/configs/so100_arm.json")
-    for name in list(sys.modules):
-        if name == "backend.main" or name.startswith("backend.main."):
-            del sys.modules[name]
-    main = importlib.import_module("backend.main")
-    with TestClient(main.app) as client:
-        yield client
-    try:
-        os.unlink(db)
-    except OSError:
-        pass
 
 
 def test_fk_reports_position(so100_app: TestClient) -> None:

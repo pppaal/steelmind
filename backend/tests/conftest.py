@@ -59,3 +59,27 @@ def fresh_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             os.unlink(p)
         except OSError:
             pass
+
+
+@pytest.fixture()
+def so100_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Boot the app against the SO-100 config, which has a planar chain."""
+    fd, db = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    monkeypatch.setenv("JOURNAL_DB", db)
+    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE", "ROUTINES_FILE"):
+        f, p = tempfile.mkstemp(suffix=".json")
+        os.close(f)
+        os.unlink(p)
+        monkeypatch.setenv(var, p)
+    monkeypatch.setenv("ROBOT_CONFIG", "backend/configs/so100_arm.json")
+    for name in list(sys.modules):
+        if name == "backend.main" or name.startswith("backend.main."):
+            del sys.modules[name]
+    main = importlib.import_module("backend.main")
+    with TestClient(main.app) as client:
+        yield client
+    try:
+        os.unlink(db)
+    except OSError:
+        pass

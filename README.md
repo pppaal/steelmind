@@ -57,6 +57,10 @@ or LeRobot SO-100 servos.
   radius) of the planar chain, sampled from joint limits. The operator
   console caches it to pre-validate reach targets (disables Reach + warns
   when out of range) before the IK round-trip.
+* **Trajectory dry-run** — `/reach` and `/keyframes/play` accept `dry_run`,
+  which simulates the planned motion (`backend/preview.py`) and reports which
+  joints would be clamped or rate-limited and the predicted end-effector
+  pose, without moving. The console's Reach **Preview** button surfaces it.
 
 ## Control modes
 

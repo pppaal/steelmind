@@ -191,6 +191,34 @@ describe("HardwarePanel", () => {
     expect(screen.getByRole("button", { name: "Reach" })).toBeDisabled();
   });
 
+  it("previews a reach (dry_run) without moving the robot", async () => {
+    const calls: { url: string; body: { dry_run?: boolean } }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url, init) => {
+        if (init?.body) calls.push({ url, body: JSON.parse(init.body as string) });
+        if (url.endsWith("/fk")) return { x: 0.2, y: 0.1, reach: 0.32 };
+        if (url.endsWith("/workspace"))
+          return { base: [0, 0], inner_radius: 0.05, outer_radius: 0.3, reach: 0.32 };
+        if (url.endsWith("/reach"))
+          return {
+            dry_run: true,
+            reached: true,
+            preview: { violations: [{ kind: "velocity", detail: "peak 3.9 rad/s over max_velocity" }], path: { end: [0.15, 0.1] } },
+          };
+        return { keyframes: {} };
+      }),
+    );
+    render(<HardwarePanel apiBase="http://x" jointNames={["shoulder_lift"]} />);
+    const preview = await screen.findByRole("button", { name: "Preview" });
+    fireEvent.click(preview);
+    await waitFor(() => expect(screen.getByText(/dry run: reachable/i)).toBeInTheDocument());
+    // The dry-run call carried dry_run: true.
+    const reachCall = calls.find((c) => c.url.endsWith("/reach"));
+    expect(reachCall?.body.dry_run).toBe(true);
+    expect(screen.getByText(/over max_velocity/i)).toBeInTheDocument();
+  });
+
   it("imports a routine file via PUT", async () => {
     const calls: { url: string; method?: string; body: unknown }[] = [];
     vi.stubGlobal(
