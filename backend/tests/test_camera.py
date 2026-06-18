@@ -1,11 +1,7 @@
 """Camera abstraction: mock BMP rendering, the build_camera factory, and the
 /camera/info + /camera/snapshot endpoints."""
 
-import importlib
-import os
 import struct
-import sys
-import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -94,30 +90,6 @@ def test_build_camera_unknown_rejected(monkeypatch) -> None:
     monkeypatch.setenv("CAMERA", "hal9000")
     with pytest.raises(RuntimeError, match="unknown CAMERA"):
         build_camera()
-
-
-@pytest.fixture()
-def camera_app(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Boot the app with the mock camera enabled."""
-    fd, db = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    monkeypatch.setenv("JOURNAL_DB", db)
-    for var in ("CALIBRATION_FILE", "KEYFRAMES_FILE", "ROUTINES_FILE"):
-        f, p = tempfile.mkstemp(suffix=".json")
-        os.close(f)
-        os.unlink(p)
-        monkeypatch.setenv(var, p)
-    monkeypatch.setenv("CAMERA", "mock")
-    for name in list(sys.modules):
-        if name == "backend.main" or name.startswith("backend.main."):
-            del sys.modules[name]
-    main = importlib.import_module("backend.main")
-    with TestClient(main.app) as client:
-        yield client
-    try:
-        os.unlink(db)
-    except OSError:
-        pass
 
 
 def test_camera_info_and_snapshot(camera_app: TestClient) -> None:
