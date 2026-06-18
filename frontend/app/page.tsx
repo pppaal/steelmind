@@ -49,6 +49,21 @@ export default function Page() {
         </div>
       </header>
 
+      {connection !== "open" && (
+        <div
+          role="alert"
+          className={`px-5 py-2 text-center text-xs font-medium ${
+            connection === "connecting"
+              ? "bg-amber-950/70 text-amber-300"
+              : "bg-rose-950/80 text-rose-200"
+          }`}
+        >
+          {connection === "connecting"
+            ? "Connecting to robot…"
+            : "Connection lost — commands will not be sent. Reconnecting…"}
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 flex-1">
           <RobotScene state={state} sensor={sensor} />

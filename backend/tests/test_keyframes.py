@@ -74,3 +74,10 @@ def test_delete_keyframe_api(fresh_app: TestClient) -> None:
     fresh_app.post("/keyframes/temp")
     assert fresh_app.delete("/keyframes/temp").status_code == 200
     assert fresh_app.delete("/keyframes/temp").status_code == 404
+
+
+def test_record_rejects_invalid_name(fresh_app: TestClient) -> None:
+    # Over-length and illegal-character names are refused with 400 before any
+    # store write (slashes are caught by routing as 404/405).
+    assert fresh_app.post("/keyframes/" + "a" * 65).status_code == 400
+    assert fresh_app.post("/keyframes/bad!name").status_code == 400

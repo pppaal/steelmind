@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,9 +34,9 @@ from .auth import (
     require_token_ws,
     require_viewer,
 )
-from .behavior_tree import BehaviorTree
 from .behaviors import BEHAVIOR_DESCRIPTIONS, BEHAVIORS
 from .calibration import Calibration
+from .connection_manager import ConnectionManager
 from .hardware import RobotHardware, build_hardware
 from .hardware.base import JointSpec
 from .journal import Journal
@@ -43,6 +44,7 @@ from .journal_base import JournalBase
 from .keyframes import KeyframeStore
 from .kinematics import PlanarChain
 from .logging_setup import configure as configure_logging
+from .metrics import AI_LATENCY_BUCKETS_MS, Metrics  # noqa: F401 - re-exported for tests
 from .middleware import RequestIdMiddleware, RequestSizeLimitMiddleware
 from .models import (
     CommandRequest,
@@ -92,6 +94,9 @@ CALIBRATION_FILE = os.getenv("CALIBRATION_FILE", "calibration.json")
 KEYFRAMES_FILE = os.getenv("KEYFRAMES_FILE", "keyframes.json")
 KEYFRAME_SEGMENT_SEC = float(os.getenv("KEYFRAME_SEGMENT_SEC", "1.5"))
 ROUTINES_FILE = os.getenv("ROUTINES_FILE", "routines.json")
+# Upper bound on a saved routine's length. Stops a malicious/buggy client
+# from persisting a 10k-step routine that DoSes the executor and broadcast.
+MAX_ROUTINE_STEPS = int(os.getenv("MAX_ROUTINE_STEPS", "64"))
 # Largest single jog step a /jog call may request, radians. Keeps a fat-
 # fingered operator from commanding a 180° slam in one click.
 MAX_JOG_RAD = float(os.getenv("MAX_JOG_RAD", "0.35"))  # ~20 degrees
@@ -116,52 +121,6 @@ def _apply_calibration(joints: list[JointSpec], calib: Calibration) -> list[Join
     ]
 
 
-class ConnectionManager:
-    def __init__(self) -> None:
-        self._clients: set[WebSocket] = set()
-        self._lock = asyncio.Lock()
-
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
-        await self.attach(ws)
-
-    async def attach(self, ws: WebSocket) -> None:
-        """Register an already-accepted socket. Used by the auth-gated /ws
-        endpoint where accept() must run before the token check."""
-        async with self._lock:
-            self._clients.add(ws)
-
-    async def disconnect(self, ws: WebSocket) -> None:
-        async with self._lock:
-            self._clients.discard(ws)
-
-    async def broadcast(self, payload: BaseModel | dict) -> None:
-        if isinstance(payload, BaseModel):
-            message = payload.model_dump_json()
-        else:
-            message = json.dumps(payload, default=str)
-        async with self._lock:
-            targets = list(self._clients)
-        if not targets:
-            return
-        # Fan out in parallel so one slow client doesn't delay the broadcast
-        # cadence for everyone else. Failures are collected and the dead
-        # sockets removed after the send wave completes. Re-raise
-        # CancelledError so shutdown isn't masked by a stuck client.
-        results = await asyncio.gather(
-            *(ws.send_text(message) for ws in targets), return_exceptions=True
-        )
-        for ws, result in zip(targets, results, strict=True):
-            if isinstance(result, asyncio.CancelledError):
-                raise result
-            if isinstance(result, Exception):
-                await self.disconnect(ws)
-
-    @property
-    def count(self) -> int:
-        return len(self._clients)
-
-
 def snapshot_to_sensor(snapshot) -> SensorData:
     """Project a HAL snapshot into the wire-format SensorData the WS clients
     already consume. Joint names that aren't in the snapshot just don't
@@ -178,84 +137,6 @@ def snapshot_to_sensor(snapshot) -> SensorData:
         battery_voltage=snapshot.battery_voltage,
         battery_percent=snapshot.battery_percent,
     )
-
-
-AI_LATENCY_BUCKETS_MS = (50, 100, 250, 500, 1000, 2000, 5000, 10000)
-
-
-class Metrics:
-    """Tiny counter+histogram set rendered as Prometheus text on /metrics."""
-
-    def __init__(self) -> None:
-        self.transitions_total = 0
-        self.ai_commands_total = 0
-        self.ai_repairs_total = 0
-        self.ai_errors_total = 0
-        self.rate_limited_total = 0
-        self.sensor_frames_total = 0
-        # AI latency histogram: cumulative counts per upper bound (ms).
-        self._latency_bucket_counts = [0] * len(AI_LATENCY_BUCKETS_MS)
-        self._latency_overflow = 0
-        self._latency_sum_ms = 0.0
-        self._latency_count = 0
-
-    def observe_ai_latency_ms(self, ms: float) -> None:
-        self._latency_sum_ms += ms
-        self._latency_count += 1
-        for i, upper in enumerate(AI_LATENCY_BUCKETS_MS):
-            if ms <= upper:
-                self._latency_bucket_counts[i] += 1
-                return
-        self._latency_overflow += 1
-
-    def _histogram_lines(self) -> list[str]:
-        lines = [
-            "# HELP steelmind_ai_latency_ms AI commander translate() wall time.",
-            "# TYPE steelmind_ai_latency_ms histogram",
-        ]
-        cumulative = 0
-        for i, upper in enumerate(AI_LATENCY_BUCKETS_MS):
-            cumulative += self._latency_bucket_counts[i]
-            lines.append(f'steelmind_ai_latency_ms_bucket{{le="{upper}"}} {cumulative}')
-        cumulative += self._latency_overflow
-        lines.append(f'steelmind_ai_latency_ms_bucket{{le="+Inf"}} {cumulative}')
-        lines.append(f"steelmind_ai_latency_ms_sum {self._latency_sum_ms:.3f}")
-        lines.append(f"steelmind_ai_latency_ms_count {self._latency_count}")
-        return lines
-
-    def render(self, *, ws_clients: int, ai_history: int, ai_sessions: int) -> str:
-        lines = [
-            "# HELP steelmind_transitions_total Total state transitions broadcast.",
-            "# TYPE steelmind_transitions_total counter",
-            f"steelmind_transitions_total {self.transitions_total}",
-            "# HELP steelmind_ai_commands_total AI commander requests successfully translated.",
-            "# TYPE steelmind_ai_commands_total counter",
-            f"steelmind_ai_commands_total {self.ai_commands_total}",
-            "# HELP steelmind_ai_repairs_total AI plans repaired after validator rejection.",
-            "# TYPE steelmind_ai_repairs_total counter",
-            f"steelmind_ai_repairs_total {self.ai_repairs_total}",
-            "# HELP steelmind_ai_errors_total AI commander upstream/translation errors.",
-            "# TYPE steelmind_ai_errors_total counter",
-            f"steelmind_ai_errors_total {self.ai_errors_total}",
-            "# HELP steelmind_rate_limited_total AI requests rejected by the rate limiter.",
-            "# TYPE steelmind_rate_limited_total counter",
-            f"steelmind_rate_limited_total {self.rate_limited_total}",
-            "# HELP steelmind_sensor_frames_total Sensor frames broadcast over /ws.",
-            "# TYPE steelmind_sensor_frames_total counter",
-            f"steelmind_sensor_frames_total {self.sensor_frames_total}",
-            "# HELP steelmind_ws_clients Current connected WebSocket clients.",
-            "# TYPE steelmind_ws_clients gauge",
-            f"steelmind_ws_clients {ws_clients}",
-            "# HELP steelmind_ai_history Total AI conversation memory turns across sessions.",
-            "# TYPE steelmind_ai_history gauge",
-            f"steelmind_ai_history {ai_history}",
-            "# HELP steelmind_ai_sessions Distinct AI conversation sessions.",
-            "# TYPE steelmind_ai_sessions gauge",
-            f"steelmind_ai_sessions {ai_sessions}",
-            *self._histogram_lines(),
-            "",
-        ]
-        return "\n".join(lines)
 
 
 def _build_journal() -> JournalBase:
@@ -296,7 +177,6 @@ class AppContext:
         self.journal: JournalBase | None = None
         self.metrics = Metrics()
         self.background_tasks: set[asyncio.Task[None]] = set()
-        self.current_tree: BehaviorTree | None = None
         self.behavior_lock = asyncio.Lock()
         # Hardware + trajectory player. Built in start() so config load /
         # bus open failures hit the lifespan handler with a real log line
@@ -365,8 +245,6 @@ class AppContext:
                     pass
                 except Exception:
                     logger.exception("background task raised during shutdown")
-        if self.current_tree:
-            await self.current_tree.stop()
         if self.current_behavior_task and not self.current_behavior_task.done():
             self.current_behavior_task.cancel()
         if self.watchdog:
@@ -515,6 +393,22 @@ def _session_key(request: Request) -> str:
     if sid:
         return sid[:64]  # opaque; clamp length to prevent memory abuse
     return _client_ip(request)
+
+
+# Names become dict keys persisted to JSON; restrict them to a sane charset so
+# a client can't inject control chars / absurd lengths into the store.
+_NAME_RE = re.compile(r"^[A-Za-z0-9 _-]{1,64}$")
+
+
+def _validate_name(name: str, kind: str) -> None:
+    if not _NAME_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"invalid {kind} name: 1-64 chars of letters, digits, space, "
+                "underscore or hyphen only"
+            ),
+        )
 
 
 @app.get("/health")
@@ -815,6 +709,7 @@ async def record_keyframe(name: str) -> dict:
     """Capture the current joint positions under `name`. Pair with the
     bring-up tool's torque-off mode (or a future UI toggle) to teach poses
     by hand."""
+    _validate_name(name, "keyframe")
     if ctx.hardware is None:
         raise HTTPException(status_code=503, detail="hardware not ready")
     snapshot = await ctx.hardware.read()
@@ -914,7 +809,7 @@ RoutineStep = Annotated[
 
 
 class RoutineBody(BaseModel):
-    steps: list[RoutineStep]
+    steps: list[RoutineStep] = Field(min_length=1, max_length=MAX_ROUTINE_STEPS)
 
 
 def _validate_routine_steps(steps: list[RoutineStep]) -> None:
@@ -1000,6 +895,7 @@ async def get_routine(name: str) -> dict:
 
 @app.put("/routines/{name}", dependencies=[Depends(require_operator)])
 async def save_routine(name: str, body: RoutineBody) -> dict:
+    _validate_name(name, "routine")
     _validate_routine_steps(body.steps)
     await ctx.routines.save(name, [s.model_dump() for s in body.steps])
     return {"ok": True, "name": name, "steps": len(body.steps)}
@@ -1046,6 +942,7 @@ async def ai_routine(req: AIRoutineRequest, request: Request) -> dict:
     repair retry on failure), save under `name`, and optionally run."""
     if not ctx.ai.enabled:
         raise HTTPException(status_code=503, detail="AI commander disabled (no ANTHROPIC_API_KEY)")
+    _validate_name(req.name, "routine")
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
@@ -1235,11 +1132,12 @@ async def _execute_plan(steps: list[PlanStep]) -> None:
                 {"type": "plan_step_failed", "command": step.command, "detail": str(e.detail)}
             )
             return
-        # If we just kicked off a behavior, wait until it finishes before
-        # advancing to the next step. The behavior tree itself transitions
-        # the state machine back to STANDING when done.
-        if step.command == "execute" and ctx.current_tree is not None:
-            await ctx.current_tree.wait()
+        # If we just kicked off a behavior, wait until its trajectory task
+        # finishes before advancing — otherwise the next step would preempt
+        # the motion mid-flight. _play() runs the behavior as
+        # current_behavior_task, which _await_motion() joins on.
+        if step.command == "execute":
+            await _await_motion()
         else:
             await asyncio.sleep(0.4)
     await ctx.manager.broadcast({"type": "plan_completed", "step_count": len(steps)})

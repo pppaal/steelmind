@@ -19,9 +19,20 @@ function shortTime(iso: string): string {
 
 export default function EventLog({ entries }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
+  // Stay pinned to the newest event only while the user is already at the
+  // bottom. If they scroll up to read history, don't yank them back down.
+  const stickRef = useRef(true);
+
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
 
   useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    if (stickRef.current && ref.current) {
+      ref.current.scrollTop = ref.current.scrollHeight;
+    }
   }, [entries.length]);
 
   return (
@@ -32,7 +43,11 @@ export default function EventLog({ entries }: Props) {
         </span>
         <span className="font-mono text-[10px] text-zinc-600">{entries.length}</span>
       </div>
-      <div ref={ref} className="h-32 overflow-y-auto px-3 py-2 font-mono text-[11px]">
+      <div
+        ref={ref}
+        onScroll={onScroll}
+        className="h-32 overflow-y-auto px-3 py-2 font-mono text-[11px]"
+      >
         {entries.length === 0 ? (
           <div className="text-zinc-600">waiting for events…</div>
         ) : (

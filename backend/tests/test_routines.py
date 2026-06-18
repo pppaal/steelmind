@@ -108,3 +108,22 @@ def test_delete_routine_api(fresh_app: TestClient) -> None:
     fresh_app.put("/routines/tmp", json={"steps": [{"type": "wait", "seconds": 0}]})
     assert fresh_app.delete("/routines/tmp").status_code == 200
     assert fresh_app.delete("/routines/tmp").status_code == 404
+
+
+def test_save_rejects_invalid_name(fresh_app: TestClient) -> None:
+    body = {"steps": [{"type": "command", "command": "stand"}]}
+    # Path-traversal-ish / control chars / over-length names are refused.
+    assert fresh_app.put("/routines/../etc", json=body).status_code in (400, 404)
+    assert fresh_app.put("/routines/" + "a" * 65, json=body).status_code == 400
+    assert fresh_app.put("/routines/has%2Fslash", json=body).status_code in (400, 404)
+
+
+def test_save_rejects_empty_steps(fresh_app: TestClient) -> None:
+    assert fresh_app.put("/routines/empty", json={"steps": []}).status_code == 422
+
+
+def test_save_rejects_too_many_steps(fresh_app: TestClient) -> None:
+    from backend import main
+
+    steps = [{"type": "wait", "seconds": 0}] * (main.MAX_ROUTINE_STEPS + 1)
+    assert fresh_app.put("/routines/huge", json={"steps": steps}).status_code == 422
