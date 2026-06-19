@@ -17,6 +17,18 @@ class ConnectionManager:
         # Optional synchronous observer of every broadcast payload (e.g. the
         # session recorder). Set by the app; runs regardless of client count.
         self.tap: Callable[[BaseModel | dict], None] | None = None
+        # Async fan-out queues for secondary consumers (e.g. the Foxglove
+        # bridge) that want every payload as a dict without being a /ws client.
+        self._subscribers: list[asyncio.Queue[dict]] = []
+
+    def subscribe(self) -> asyncio.Queue[dict]:
+        q: asyncio.Queue[dict] = asyncio.Queue(maxsize=512)
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue[dict]) -> None:
+        if q in self._subscribers:
+            self._subscribers.remove(q)
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -44,6 +56,14 @@ class ConnectionManager:
             message = payload.model_dump_json()
         else:
             message = json.dumps(payload, default=str)
+        # Fan out a dict form to async subscribers (drop on a full/slow queue).
+        if self._subscribers:
+            as_dict = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
+            for q in self._subscribers:
+                try:
+                    q.put_nowait(as_dict)
+                except asyncio.QueueFull:
+                    pass
         async with self._lock:
             targets = list(self._clients)
         if not targets:

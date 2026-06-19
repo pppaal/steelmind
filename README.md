@@ -47,6 +47,10 @@ or LeRobot SO-100 servos.
   the current frame (PNG) to the Claude request so it can ground a command in
   what the robot sees; the console exposes a 👁 vision toggle when a camera is
   present. Degrades gracefully to text-only if capture fails.
+* **Foxglove bridge** (`/foxglove`) — a `foxglove.websocket.v1` server so
+  [Foxglove Studio](https://foxglove.dev) can connect and live-visualize
+  steelmind's channels (`/status`, `/sensor`, `/state_transition`, `/events`)
+  with its own 3D / plot / raw-message panels — no custom UI needed.
 * **Demonstration capture** (`backend/demos.py`) — record labeled episodes
   (task + success/failure) of joint state at `SENSOR_HZ` and export them in a
   LeRobotDataset-style schema (`observation.state` / `action` as next-state /
@@ -338,6 +342,9 @@ console signs automatically when it holds a token; `/health` advertises
 * **Camera**: `pip install -r requirements-camera.txt`, set `CAMERA=opencv`
   (and `CAMERA_DEVICE`) to drive a real USB/CSI camera; `CAMERA=mock` needs
   nothing. Feeds at `/camera/snapshot` and `/camera/stream`.
+* **Foxglove Studio**: open Foxglove, add a "Foxglove WebSocket" connection to
+  `ws://localhost:8000/foxglove` (append `?token=...` when auth is on) to plot
+  and inspect live telemetry with Foxglove's panels.
 * **Prometheus + Grafana**: `docker compose --profile monitoring up` scrapes
   `/metrics` and serves a pre-provisioned dashboard at `localhost:3001`
   (state, e-stop/recording/replaying, AI latency p95, command/error rates,
